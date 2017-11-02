@@ -39,6 +39,8 @@
 #include "say.h"
 #include "fiber.h"
 
+#include "assoc.h"
+
 #define CRLF "\n"
 
 #ifdef ENABLE_BACKTRACE
@@ -50,6 +52,74 @@
  */
 
 static char backtrace_buf[4096 * 4];
+
+static struct mh_i64ptr_t *proc_cache = NULL;
+struct proc_cache_entry {
+	char name[200];
+	unw_word_t offset;
+};
+
+void
+backtrace_proc_cache_clear()
+{
+	if (proc_cache == NULL)
+		return;
+	while (mh_size(proc_cache) > 0) {
+		mh_int_t i = mh_first(proc_cache);
+		mh_i64ptr_node_t *node = mh_i64ptr_node(proc_cache, i);
+		assert(node != NULL);
+		free(node->val);
+		mh_i64ptr_remove(proc_cache, node, NULL);
+	}
+	mh_i64ptr_delete(proc_cache);
+	proc_cache = NULL;
+}
+
+static void
+backtrace_proc_name(unw_cursor *unw_cur, char *proc_name, int proc_name_len,
+		    unw_word_t *offset)
+{
+	unw_word_t ip;
+	unw_get_reg(unw_cur, UNW_REG_IP, &ip);
+	struct proc_cache_entry *entry;
+	struct mh_i64ptr_node_t node;
+	mh_int_t k;
+
+	if (proc_cache == NULL) {
+		proc_cache = mh_i64ptr_new();
+		if (proc_cache)
+			goto error;
+	}
+
+	k  = mh_i64ptr_find(proc_cache, ip, NULL);
+	if (k != mh_end(proc_cache)) {
+		entry = (struct proc_cache_entry *)
+			mh_i64ptr_node(proc_cache, k)->val;
+	}  else {
+		entry = (struct proc_cache_entry *)
+			malloc(sizeof(struct proc_cache_entry));
+		if (entry == NULL)
+			goto error;
+		unw_get_proc_name(unw_cur, entry->name, sizeof(entry->name),
+				  &entry->offset);
+		node.key = ip;
+		node.val = entry;
+
+		k = mh_i64ptr_put(proc_cache, &node, NULL, NULL);
+		if (k == mh_end(proc_cache)) {
+			snprintf(proc_name, proc_name_len, "%s", entry->name);
+			*offset = entry->offset;
+			free(entry);
+			return;
+		}
+	}
+	snprintf(proc_name, proc_name_len, "%s", entry->name);
+	*offset = entry->offset;
+	return;
+error:
+	snprintf(proc_name, proc_name_len, "%016lx", ip);
+	*offset = 0;
+}
 
 char *
 backtrace()
@@ -306,7 +376,7 @@ backtrace_foreach(backtrace_cb cb, coro_context *coro_ctx, void *cb_ctx)
 		}
 		old_sp = sp;
 		unw_get_reg(&unw_cur, UNW_REG_SP, &sp);
-		unw_get_proc_name(&unw_cur, proc, sizeof(proc), &offset);
+		backtrace_proc_name(&unw_cur, proc, sizeof(proc), &offset);
 
 		char *cxxname = abi::__cxa_demangle(proc, demangle_buf,
 						    &demangle_buf_len,

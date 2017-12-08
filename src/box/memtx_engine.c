@@ -415,8 +415,15 @@ memtx_engine_rollback(struct engine *engine, struct txn *txn)
 	memtx_engine_prepare(engine, txn);
 	struct txn_stmt *stmt;
 	stailq_reverse(&txn->stmts);
-	stailq_foreach_entry(stmt, &txn->stmts, next)
+	stailq_foreach_entry(stmt, &txn->stmts, next) {
+		/* Temporary hack: don't try to rollback ephemeral spaces
+		 * since they are able to appear and disappear within
+		 * one transaction. Hence, it is impossible to rollback
+		 * already destroyed ephemeral table.
+		 */
+		if (stmt->space_id == 0) continue;
 		memtx_engine_rollback_statement(engine, txn, stmt);
+	}
 }
 
 static void

@@ -223,7 +223,9 @@ const void *tarantoolSqlite3PayloadFetch(BtCursor *pCur, u32 *pAmt)
 const void *
 tarantoolSqlite3TupleColumnFast(BtCursor *pCur, u32 fieldno, u32 *field_size)
 {
-	assert((pCur->curFlags & BTCF_TaCursor) != 0);
+	assert(pCur->curFlags & BTCF_TaCursor ||
+	       pCur->curFlags & BTCF_TEphemCursor);
+
 	struct ta_cursor *c = pCur->pTaCursor;
 	assert(c != NULL);
 	assert(c->tuple_last != NULL);
@@ -248,6 +250,12 @@ int tarantoolSqlite3First(BtCursor *pCur, int *pRes)
 {
 	return cursor_seek(pCur, pRes, ITER_GE,
 			   nil_key, nil_key + sizeof(nil_key));
+}
+
+int tarantoolSqlite3EphemeralLast(BtCursor *pCur, int *pRes)
+{
+	return cursor_ephemeral_seek(pCur, pRes, ITER_LE,
+				     nil_key, nil_key + sizeof(nil_key));
 }
 
 int tarantoolSqlite3Last(BtCursor *pCur, int *pRes)
@@ -281,6 +289,19 @@ int tarantoolSqlite3Next(BtCursor *pCur, int *pRes)
 		((struct ta_cursor *)pCur->pTaCursor)->type
 	) > 0);
 	return cursor_advance(pCur, pRes);
+}
+
+int tarantoolSqlite3EphemeralPrevious(BtCursor *pCur, int *pRes)
+{
+	assert(pCur->curFlags & BTCF_TEphemCursor);
+	if (pCur->eState == CURSOR_INVALID) {
+		*pRes = 1;
+		return SQLITE_OK;
+	}
+	assert(pCur->pTaCursor);
+	assert(iterator_direction(
+		((struct ta_cursor *)pCur->pTaCursor)->type) < 0);
+	return cursor_ephemeral_advance(pCur, pRes);
 }
 
 int tarantoolSqlite3Previous(BtCursor *pCur, int *pRes)
@@ -363,6 +384,68 @@ int tarantoolSqlite3MovetoUnpacked(BtCursor *pCur, UnpackedRecord *pIdxKey,
 		pIdxKey->eqSeen = 1;
 	} else {
 		*pRes = -1; /* -1 also means EOF */
+	}
+	return rc;
+}
+
+int tarantoolSqlite3MovetoUnpackedEphemeral(BtCursor *pCur,
+					    UnpackedRecord *pIdxKey, int *pRes)
+{
+	assert(pCur->curFlags & BTCF_TEphemCursor);
+
+	int rc, res_success;
+	size_t ks;
+	const char *k, *ke;
+	enum iterator_type iter_type;
+
+	ks = sqlite3VdbeMsgpackRecordLen(pIdxKey->aMem,
+					 pIdxKey->nField);
+	k = region_reserve(&fiber()->gc, ks);
+	if (k == NULL) return SQLITE_NOMEM;
+	ke = k + sqlite3VdbeMsgpackRecordPut((u8 *)k, pIdxKey->aMem,
+					     pIdxKey->nField);
+
+	switch (pIdxKey->opcode) {
+	default:
+		assert(0);
+	case 255:
+		iter_type = ((struct ta_cursor *) pCur->pTaCursor)->type;
+		res_success = 0;
+		break;
+	case OP_SeekLT:
+		iter_type = ITER_LT;
+		res_success = -1;
+		break;
+	case OP_SeekLE:
+		iter_type = (pCur->hints & BTREE_SEEK_EQ) ?
+			    ITER_REQ : ITER_LE;
+		res_success = 0;
+		break;
+	case OP_SeekGE:
+		iter_type = (pCur->hints & BTREE_SEEK_EQ) ?
+			    ITER_EQ : ITER_GE;
+		res_success = 0;
+		break;
+	case OP_SeekGT:
+		iter_type = ITER_GT;
+		res_success = 1;
+		break;
+	case OP_NoConflict:
+	case OP_NotFound:
+	case OP_Found:
+	case OP_IdxDelete:
+		iter_type = ITER_EQ;
+		res_success = 0;
+		break;
+	}
+
+	rc = cursor_ephemeral_seek(pCur, pRes, iter_type, k, ke);
+	if (*pRes == 0) {
+		*pRes = res_success;
+
+		pIdxKey->eqSeen = 1;
+	} else {
+		*pRes = -1;
 	}
 	return rc;
 }
@@ -497,6 +580,54 @@ int tarantoolSqlite3Insert(BtCursor *pCur, const BtreePayload *pX)
 	    != 0) {
 		return SQLITE_TARANTOOL_ERROR;
 	}
+	return SQLITE_OK;
+}
+
+int tarantoolSqlite3EphemeralDelete(BtCursor *pCur)
+{
+	assert(pCur->curFlags & BTCF_TEphemCursor);
+
+	struct ta_cursor *c = pCur->pTaCursor;
+	assert(c);
+	struct space *ephem_space = c->ephem_space;
+	assert(ephem_space);
+
+	char *key;
+	uint32_t key_size;
+	assert(c->iter);
+	assert(c->tuple_last);
+
+	key = tuple_extract_key(c->tuple_last,
+				box_iterator_key_def(c->iter),
+				&key_size);
+	if (key == NULL)
+		return SQLITE_TARANTOOL_ERROR;
+
+	struct request request;
+	request.type = IPROTO_DELETE;
+	request.space_id = 0;
+	request.index_id = 0; /* primary index */
+	request.key = key;
+	request.key_end = key + key_size;
+
+	struct txn *txn = txn_begin_stmt(ephem_space);
+	if (txn == NULL)
+		return SQLITE_TARANTOOL_ERROR;
+
+	struct tuple *tuple;
+	int rc;
+
+	rc = space_execute_delete(ephem_space, txn, &request, &tuple);
+	if (rc != 0) {
+		diag_log();
+		txn_rollback_stmt();
+		return SQLITE_TARANTOOL_ERROR;
+	}
+	if (tuple)
+		tuple_ref(tuple);
+	if (txn_commit_stmt(txn, &request) != 0)
+		return SQLITE_TARANTOOL_ERROR;
+
 	return SQLITE_OK;
 }
 

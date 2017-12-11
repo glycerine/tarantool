@@ -645,4 +645,22 @@ identifier_testcases.run_identifier_tests(
 	end,
 	function (identifier) box.space[identifier]:drop() end
 );
+
+--
+-- gh-2914: check column name validation.
+-- Ensure that col names are validated as identifiers.
+--
+s = box.schema.create_space('test');
+i = s:create_index("primary", {parts={1, "integer"}});
+identifier_testcases.run_identifier_tests(
+	function (identifier)
+		s:format({{name=identifier,type="integer"}})
+		local t = s:replace({1})
+		if t[identifier] ~= 1 then
+			error("format identifier error")
+		end
+	end,
+	function (identifier) end
+);
+s:drop();
 test_run:cmd("setopt delimiter ''");

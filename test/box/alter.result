@@ -1699,3 +1699,31 @@ box.space.test == s
 s:drop()
 ---
 ...
+--
+-- gh-2914: check column name validation.
+--
+-- Ensure that col names are validated as identifiers.
+s = box.schema.space.create('test', { format = {" bad_name1"} })
+---
+- error: Invalid identifier ' bad_name1' (expected letters, digits or an underscore)
+...
+s = box.schema.space.create('test', { format = {"@bad_name2"} })
+---
+- error: Invalid identifier '@bad_name2' (expected letters, digits or an underscore)
+...
+s = box.schema.space.create('test', { format = {",bad_name3"} })
+---
+- error: Invalid identifier ',bad_name3' (expected letters, digits or an underscore)
+...
+s = box.schema.space.create('test', { format = {",bad_name3"} })
+---
+- error: Invalid identifier ',bad_name3' (expected letters, digits or an underscore)
+...
+s = box.schema.space.create('test', { format = {".bad_name4"} })
+---
+- error: Invalid identifier '.bad_name4' (expected letters, digits or an underscore)
+...
+s = box.schema.space.create('test', { format = {"5bad_name5"} })
+---
+- error: Invalid identifier '5bad_name5' (expected letters, digits or an underscore)
+...

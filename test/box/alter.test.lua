@@ -646,3 +646,15 @@ s = box.schema.create_space('test')
 idx = s:create_index('idx')
 box.space.test == s
 s:drop()
+
+--
+-- gh-2914: check column name validation.
+--
+
+-- Ensure that col names are validated as identifiers.
+s = box.schema.space.create('test', { format = {" bad_name1"} })
+s = box.schema.space.create('test', { format = {"@bad_name2"} })
+s = box.schema.space.create('test', { format = {",bad_name3"} })
+s = box.schema.space.create('test', { format = {",bad_name3"} })
+s = box.schema.space.create('test', { format = {".bad_name4"} })
+s = box.schema.space.create('test', { format = {"5bad_name5"} })

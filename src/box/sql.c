@@ -450,6 +450,19 @@ int tarantoolSqlite3MovetoUnpackedEphemeral(BtCursor *pCur,
 	return rc;
 }
 
+int tarantoolSqlite3EphemeralCount(struct BtCursor *pCur, i64 *pnEntry)
+{
+	assert(pCur->curFlags & BTCF_TEphemCursor);
+
+	struct ta_cursor *c = pCur->pTaCursor;
+	assert(c);
+	assert(c->ephem_space);
+
+	struct index *primary_index = *c->ephem_space->index;
+	*pnEntry = index_size(primary_index);
+	return SQLITE_OK;
+}
+
 int tarantoolSqlite3Count(BtCursor *pCur, i64 *pnEntry)
 {
 	assert(pCur->curFlags & BTCF_TaCursor);
@@ -1849,6 +1862,40 @@ sql_debug_info(struct info_handler *h)
 	info_append_int(h, "sql_sort_count", sql_sort_count);
 	info_append_int(h, "sql_found_count", sql_found_count);
 	info_end(h);
+}
+
+int tarantoolSqlite3EphemeralGetMaxId(BtCursor *pCur, uint32_t fieldno,
+				       uint64_t *max_id)
+{
+	assert(pCur->pTaCursor);
+	struct ta_cursor *c = pCur->pTaCursor;
+	struct space *ephem_space = c->ephem_space;
+	assert(ephem_space);
+	struct index *primary_index = *ephem_space->index;
+
+	char key[16];
+	mp_encode_array(key, 0);
+	struct tuple *tuple;
+	struct txn *txn;
+
+	uint32_t part_count = primary_index->def->key_def->part_count;
+	if (txn_begin_ro_stmt(ephem_space, &txn) != 0)
+		return SQLITE_TARANTOOL_ERROR;
+	if (index_max(primary_index, key, part_count, &tuple) != 0) {
+		txn_rollback_stmt();
+		return SQLITE_TARANTOOL_ERROR;
+	}
+	txn_commit_ro_stmt(txn);
+	if (tuple != NULL && tuple_bless(tuple) == NULL)
+		return SQLITE_TARANTOOL_ERROR;
+
+	if (tuple == NULL) {
+		*max_id = 0;
+		return SQLITE_OK;
+	}
+	tuple_field_u64(tuple, fieldno, max_id);
+
+	return SQLITE_OK;
 }
 
 /**

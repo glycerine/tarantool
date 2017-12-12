@@ -421,6 +421,28 @@ local function upgrade_to_1_8_2()
 end
 
 --------------------------------------------------------------------------------
+-- Tarantool 1.8.4
+--------------------------------------------------------------------------------
+--
+--local function upgrade_to_1_8_4()
+--    local _space = box.space[box.schema.SPACE_ID]
+--    local _index = box.space[box.schema.INDEX_ID]
+--    local _trigger = box.space[box.schema.TRIGGER_ID]
+--    local format = {{name='name', type='string'},
+--        {name='opts', type='map'}}
+--
+--    log.info("create space _trigger")
+--    _space:insert{_trigger.id, ADMIN, '_trigger', 'memtx', 0, setmap({}), {}}
+--    log.info("create index primary on _trigger")
+--    _index:insert{_trigger.id, 0, 'primary', 'tree', { unique = true },
+--        {{0, 'string'}}}
+--
+--    log.info("alter space _trigger set format")
+--    _trigger:format(format)
+--end
+
+--------------------------------------------------------------------------------
+
 
 local function get_version()
     local version = box.space._schema:get{'version'}

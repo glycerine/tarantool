@@ -102,6 +102,10 @@ enum {
 	BOX_TRUNCATE_ID = 330,
 	/** Space id of _space_sequence. */
 	BOX_SPACE_SEQUENCE_ID = 340,
+	/** Space id of _sql_stat. */
+	BOX_SQL_STAT_1_ID = 350,
+	/** Space id of _sql_stat. */
+	BOX_SQL_STAT_4_ID = 351,
 	/** End of the reserved range of system spaces. */
 	BOX_SYSTEM_ID_MAX = 511,
 	BOX_ID_NIL = 2147483647

@@ -346,16 +346,16 @@ schema_init()
 			 FIELD_TYPE_UNSIGNED, false, NULL);
 	sc_space_new(BOX_INDEX_ID, "_index", key_def,
 		     &alter_space_on_replace_index, &on_stmt_begin_index);
-//	/* tbl name */
-//	key_def_set_part(key_def, 0 /* part no */, 0 /* field no */,
-//			 FIELD_TYPE_STRING, false, NULL);
-//	/* index name */
-//	key_def_set_part(key_def, 1 /* part no */, 1 /* field no */,
-//			 FIELD_TYPE_STRING, false, NULL);
-//	sc_space_new(BOX_SQL_STAT_1_ID, "_sql_stat1", key_def,
-//		     &alter_space_on_replace_index, &on_stmt_begin_index);
+	/* tbl name */
+	key_def_set_part(key_def, 0 /* part no */, 0 /* field no */,
+			 FIELD_TYPE_STRING, false, NULL);
+	/* index name */
+	key_def_set_part(key_def, 1 /* part no */, 1 /* field no */,
+			 FIELD_TYPE_STRING, false, NULL);
+	sc_space_new(BOX_SQL_STAT_1_ID, "_sql_stat1", key_def,
+		     NULL, NULL);
 //	free(key_def);
-//	key_def = key_def_new(2); /* part count */
+//	key_def = key_def_new(5); /* part count */
 //	/* tbl name */
 //	key_def_set_part(key_def, 0 /* part no */, 0 /* field no */,
 //			 FIELD_TYPE_STRING, false, NULL);
@@ -367,7 +367,7 @@ schema_init()
 //			 FIELD_TYPE_STRING, false, NULL);
 //	sc_space_new(BOX_SQL_STAT_4_ID, "_sql_stat4", key_def,
 //		     &alter_space_on_replace_index, &on_stmt_begin_index);
-	free(key_def);
+//	free(key_def);
 }
 
 void

@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(533)
+test:plan(529)
 
 --!./tcltestrunner.lua
 -- 2010 July 16
@@ -1370,8 +1370,8 @@ test:do_select_tests(
         {"3.1", "SELECT x FROM h2", {"One", "Two", "Three", "Four", "one", "two", "three", "four"}},
         {"3.2", "SELECT x FROM h1, h2 ON (x=b)", {"One", "one", "Four", "four"}},
 
-        {"4.1", "SELECT DISTINCT x FROM h2", {"One", "Two", "Three", "Four"}},
-        {"4.2", "SELECT DISTINCT x FROM h1, h2 ON (x=b)", {"One", "Four"}},
+--        {"4.1", "SELECT DISTINCT x FROM h2", {"One", "Two", "Three", "Four"}},
+--        {"4.2", "SELECT DISTINCT x FROM h1, h2 ON (x=b)", {"One", "Four"}},
     })
 
 -- EVIDENCE-OF: R-02054-15343 For the purposes of detecting duplicate

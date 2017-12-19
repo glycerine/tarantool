@@ -4240,7 +4240,7 @@ case OP_NextId: {     /* out3 */
  * Synopsis: r[P3]=get_max(space_index[P1]{Column[P2]})
  *
  * This opcode works in the same way as OP_NextId does, except it is
- * only applied for ephemeral tables. The difference is in the fact that
+ * applied only for ephemeral tables. The difference is in the fact that
  * all ephemeral tables don't have space_id (to be more precise it equals to zero).
  */
 case OP_NextIdEphemeral: {

@@ -2788,6 +2788,7 @@ whereLoopAddBtree(WhereLoopBuilder * pBuilder,	/* WHERE clause information */
 	Table *pTab;		/* Table being queried */
 	struct session *user_session = current_session();
 
+	(void)user_session;
 	pNew = pBuilder->pNew;
 	pWInfo = pBuilder->pWInfo;
 	pTabList = pWInfo->pTabList;

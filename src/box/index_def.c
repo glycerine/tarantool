@@ -30,6 +30,7 @@
  */
 #include "index_def.h"
 #include "schema_def.h"
+#include "identifier.h"
 
 const char *index_type_strs[] = { "HASH", "TREE", "BITSET", "RTREE" };
 

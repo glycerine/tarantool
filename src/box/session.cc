@@ -35,6 +35,8 @@
 #include "trigger.h"
 #include "random.h"
 #include "user.h"
+#include "identifier.h"
+#include "error.h"
 
 const char *session_type_strs[] = {
 	"background",

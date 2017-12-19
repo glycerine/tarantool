@@ -48,6 +48,7 @@
 #include "vclock.h" /* VCLOCK_MAX */
 #include "xrow.h"
 #include "iproto_constants.h"
+#include "identifier.h"
 #include "memtx_tuple.h"
 #include "version.h"
 #include "sequence.h"

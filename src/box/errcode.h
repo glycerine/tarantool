@@ -122,7 +122,7 @@ struct errcode_record {
 	/* 67 */_(ER_REPLICA_ID_IS_RESERVED,	"Can't initialize replica id with a reserved value %u") \
 	/* 68 */_(ER_INVALID_ORDER,		"Invalid LSN order for instance %u: previous LSN = %llu, new lsn = %llu") \
 	/* 69 */_(ER_MISSING_REQUEST_FIELD,	"Missing mandatory field '%s' in request") \
-	/* 70 */_(ER_IDENTIFIER,		"Invalid identifier '%s' (expected letters, digits or an underscore)") \
+	/* 70 */_(ER_IDENTIFIER,		"Invalid identifier '%s' (expected printable symbols only)") \
 	/* 71 */_(ER_DROP_FUNCTION,		"Can't drop function %u: %s") \
 	/* 72 */_(ER_ITERATOR_TYPE,		"Unknown iterator type '%s'") \
 	/* 73 */_(ER_REPLICA_MAX,		"Replica count limit reached: %u") \
@@ -212,6 +212,7 @@ struct errcode_record {
 	/*157 */_(ER_SQL_EXECUTE,               "Failed to execute SQL statement: %s") \
 	/*158 */_(ER_SQL,			"SQL error: %s") \
 	/*159 */_(ER_SQL_BIND_NOT_FOUND,	"Parameter %s was not found in the statement") \
+	/*160 */_(ER_ICU_INITIALIZE,		"Failed to initialize ICU") \
 
 /*
  * !IMPORTANT! Please follow instructions at start of the file

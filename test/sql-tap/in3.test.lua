@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(26)
+test:plan(27)
 
 --!./tcltestrunner.lua
 -- 2007 November 29

@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(21)
+test:plan(22)
 
 --!./tcltestrunner.lua
 -- 2012 September 18
@@ -274,15 +274,15 @@ test:do_execsql_test(
         INSERT INTO t1 VALUES(2, 'ONE');
     ]])
 
---test:do_execsql_test(
---    "6.1.2",
---    [[
---        SELECT count(*) FROM t1 WHERE a COLLATE BINARY IN (SELECT DISTINCT a FROM t1)
---    ]], {
---        -- <6.1.2>
---        1
---        -- </6.1.2>
---    })
+test:do_execsql_test(
+    "6.1.2",
+    [[
+        SELECT count(*) FROM t1 WHERE a COLLATE BINARY IN (SELECT DISTINCT a FROM t1)
+    ]], {
+        -- <6.1.2>
+        1
+        -- </6.1.2>
+    })
 
 test:do_execsql_test(
     "6.2.1",

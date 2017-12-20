@@ -7976,6 +7976,8 @@ sqlite3BtreeClearTable(Btree * p, int iTable, int *pnChange)
 int
 sqlite3BtreeClearTableOfCursor(BtCursor * pCur)
 {
+	if (pCur->curFlags & BTCF_TEphemCursor)
+		return tarantoolSqlite3EphemeralClearTable(pCur);
 	return sqlite3BtreeClearTable(pCur->pBtree, pCur->pgnoRoot, 0);
 }
 

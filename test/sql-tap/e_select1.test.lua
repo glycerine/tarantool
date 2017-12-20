@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 test = require("sqltester")
-test:plan(529)
+test:plan(531)
 
 --!./tcltestrunner.lua
 -- 2010 July 16
@@ -1370,8 +1370,8 @@ test:do_select_tests(
         {"3.1", "SELECT x FROM h2", {"One", "Two", "Three", "Four", "one", "two", "three", "four"}},
         {"3.2", "SELECT x FROM h1, h2 ON (x=b)", {"One", "one", "Four", "four"}},
 
---        {"4.1", "SELECT DISTINCT x FROM h2", {"One", "Two", "Three", "Four"}},
---        {"4.2", "SELECT DISTINCT x FROM h1, h2 ON (x=b)", {"One", "Four"}},
+        {"4.1", "SELECT DISTINCT x FROM h2", {"One", "Two", "Three", "Four"}},
+        {"4.2", "SELECT DISTINCT x FROM h1, h2 ON (x=b)", {"One", "Four"}},
     })
 
 -- EVIDENCE-OF: R-02054-15343 For the purposes of detecting duplicate
@@ -1689,14 +1689,14 @@ test:do_select_tests(
     "e_select-7.10",
     {
         {"1", "SELECT 'abc'                UNION SELECT 'ABC'", {"ABC",  "abc"}},
---        {"2", "SELECT 'abc' COLLATE nocase UNION SELECT 'ABC'", {"ABC" }},
---        {"3", "SELECT 'abc'                UNION SELECT 'ABC' COLLATE nocase", {"ABC" }},
---        {"4", "SELECT 'abc' COLLATE binary UNION SELECT 'ABC' COLLATE nocase", {"ABC",  "abc"}},
---        {"5", "SELECT 'abc' COLLATE nocase UNION SELECT 'ABC' COLLATE binary", {"ABC" }},
---        {"6", "SELECT a FROM y1 UNION SELECT b FROM y1", {"abc" }},
---        {"7", "SELECT b FROM y1 UNION SELECT a FROM y1", {"Abc",  "abc"}},
---        {"8", "SELECT a FROM y1 UNION SELECT c FROM y1", {"aBC" }},
---        {"9", "SELECT a FROM y1 UNION SELECT c COLLATE binary FROM y1", {"aBC" }},
+        {"2", "SELECT 'abc' COLLATE \"unicode_ci\" UNION SELECT 'ABC'", {"ABC" }},
+        {"3", "SELECT 'abc'                UNION SELECT 'ABC' COLLATE \"unicode_ci\"", {"ABC" }},
+        {"4", "SELECT 'abc' COLLATE binary UNION SELECT 'ABC' COLLATE \"unicode_ci\"", {"ABC",  "abc"}},
+        {"5", "SELECT 'abc' COLLATE \"unicode_ci\" UNION SELECT 'ABC' COLLATE binary", {"ABC" }},
+        {"6", "SELECT a FROM y1 UNION SELECT b FROM y1", {"abc" }},
+        {"7", "SELECT b FROM y1 UNION SELECT a FROM y1", {"Abc",  "abc"}},
+        {"8", "SELECT a FROM y1 UNION SELECT c FROM y1", {"aBC" }},
+        {"9", "SELECT a FROM y1 UNION SELECT c COLLATE binary FROM y1", {"aBC" }},
     })
 
 -- EVIDENCE-OF: R-32706-07403 No affinity transformations are applied to

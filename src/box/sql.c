@@ -473,7 +473,8 @@ int tarantoolSqlite3Count(BtCursor *pCur, i64 *pnEntry)
 	return SQLITE_OK;
 }
 
-int tarantoolSqlite3EphemeralCreate(BtCursor *pCur, uint32_t field_count)
+int tarantoolSqlite3EphemeralCreate(BtCursor *pCur, uint32_t field_count,
+				    struct coll *aColl)
 {
 	assert(pCur);
 	assert(pCur->curFlags & BTCF_TEphemCursor);
@@ -491,7 +492,7 @@ int tarantoolSqlite3EphemeralCreate(BtCursor *pCur, uint32_t field_count)
 		key_def_set_part(ephemer_key_def, part /* part no */,
 				 part /* filed no */,
 				 FIELD_TYPE_SCALAR, false /* is_nullable */,
-				 NULL /* coll */);
+				 aColl);
 	}
 
 	struct index_def *ephemer_index_def =
@@ -671,6 +672,54 @@ int tarantoolSqlite3Delete(BtCursor *pCur, u8 flags)
 	rc = box_delete(space_id, index_id, key, key + key_size, NULL);
 
 	return rc == 0 ? SQLITE_OK : SQLITE_TARANTOOL_ERROR;
+}
+
+int tarantoolSqlite3EphemeralClearTable(BtCursor *pCur)
+{
+	assert(pCur);
+	assert(pCur->curFlags & BTCF_TEphemCursor);
+
+	struct ta_cursor *c = pCur->pTaCursor;
+	assert(c->ephem_space);
+
+	struct space *ephem_space = c->ephem_space;
+	struct iterator *it = index_create_iterator(*ephem_space->index,
+						    ITER_ALL, nil_key,
+						    0 /* part_count */);
+	if (it == NULL) {
+		pCur->eState = CURSOR_INVALID;
+		return SQLITE_TARANTOOL_ERROR;
+	}
+
+	struct tuple *tuple;
+	char *key;
+	uint32_t  key_size;
+	int rc;
+	struct txn *txn;
+	struct request request;
+	request.type = IPROTO_DELETE;
+	request.space_id = 0;
+	request.index_id = 0;
+	while (iterator_next(it, &tuple) == 0 &&
+		tuple != NULL) {
+		key = tuple_extract_key(tuple, box_iterator_key_def(it),
+					&key_size);
+		request.key = key;
+		request.key_end = key + key_size;
+		txn = txn_begin_stmt(ephem_space);
+		if (txn == NULL)
+			return SQLITE_TARANTOOL_ERROR;
+		rc = space_execute_delete(ephem_space, txn, &request, &tuple);
+		if (rc != 0) {
+			txn_rollback_stmt();
+			return SQLITE_TARANTOOL_ERROR;
+		}
+		if (txn_commit_stmt(txn, &request) != 0)
+			return SQLITE_TARANTOOL_ERROR;
+	}
+	iterator_delete(it);
+
+	return SQLITE_OK;
 }
 
 /*

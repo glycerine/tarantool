@@ -265,8 +265,6 @@ destroy_identifier_check();
 static inline void
 identifier_check_xc(const char *str, uint32_t len)
 {
-	if (len == 0)
-		tnt_raise(ClientError, ER_IDENTIFIER, tt_cstr(str, len));
 	if (! identifier_characters_is_valid(str, len))
 		tnt_raise(ClientError, ER_IDENTIFIER, tt_cstr(str, len));
 }

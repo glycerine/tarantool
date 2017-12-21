@@ -73,6 +73,8 @@ schema_object_name(enum schema_object_type type)
 bool
 identifier_characters_is_valid(const char *str, uint32_t str_len)
 {
+	if (str_len == 0)
+		return false;
 	const char * end = str + str_len;
 	UChar32 c;
 	UErrorCode status = U_ZERO_ERROR ;

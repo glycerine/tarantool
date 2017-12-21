@@ -646,6 +646,13 @@ identifier_testcases.run_identifier_tests(
 	function (identifier) box.space[identifier]:drop() end
 );
 
+tsp = box.schema.create_space("tsp");
+identifier_testcases.run_identifier_tests(
+    function (identifier) tsp:create_index(identifier, {parts={1}}) end,
+    function (identifier) tsp.index[identifier]:drop() end
+);
+tsp:drop();
+
 --
 -- gh-2914: check column name validation.
 -- Ensure that col names are validated as identifiers.
@@ -663,4 +670,11 @@ identifier_testcases.run_identifier_tests(
 	function (identifier) end
 );
 s:drop();
+
+-- gh-2914: check coll name validation.
+identifier_testcases.run_identifier_tests(
+    function (identifier) box.internal.collation.create(identifier, 'ICU', 'ru-RU', {}) end,
+    function (identifier) box.internal.collation.drop(identifier) end
+);
+
 test_run:cmd("setopt delimiter ''");

@@ -112,6 +112,14 @@ identifier_testcases.run_identifier_tests(
 	end,
 	box.schema.user.drop
 );
+identifier_testcases.run_identifier_tests(
+	function (identifier)
+		box.schema.role.create(identifier)
+		box.schema.role.grant(identifier, 'execute,read,write',
+			'universe', nil, {if_not_exists = false})
+	end,
+	box.schema.role.drop
+);
 test_run:cmd("setopt delimiter ''");
 
 -- valid identifiers

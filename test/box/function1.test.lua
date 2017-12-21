@@ -83,4 +83,20 @@ box.schema.func.drop('function1.test_yield')
 ch:get()
 s:drop()
 
+-- gh-2914: check identifier constraints.
+test_run = require('test_run').new()
+identifier_testcases = require("identifier_testcases")
+test_run:cmd("setopt delimiter ';'")
+identifier_testcases.run_identifier_tests(
+	function (identifier)
+		box.schema.func.create(identifier, {language = "lua"})
+		box.schema.user.grant('guest', 'execute', 'function', identifier)
+		local ok, res = pcall(c.call, c, identifier)
+		if ok ~= false or not string.find(tostring(res), "Procedure") then
+			error("Should not fire")
+		end
+	end,
+	box.schema.func.drop
+);
+test_run:cmd("setopt delimiter ''");
 c:close()

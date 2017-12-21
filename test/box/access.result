@@ -253,6 +253,17 @@ identifier_testcases.run_identifier_tests(
 ---
 - All tests passed
 ...
+identifier_testcases.run_identifier_tests(
+	function (identifier)
+		box.schema.role.create(identifier)
+		box.schema.role.grant(identifier, 'execute,read,write',
+			'universe', nil, {if_not_exists = false})
+	end,
+	box.schema.role.drop
+);
+---
+- All tests passed
+...
 test_run:cmd("setopt delimiter ''");
 ---
 - true

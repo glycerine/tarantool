@@ -255,7 +255,8 @@ apply_row(struct xstream *stream, struct xrow_header *row)
 static void
 apply_wal_row(struct xstream *stream, struct xrow_header *row)
 {
-	apply_row(stream, row);
+	if (row->type != IPROTO_OK)
+		apply_row(stream, row);
 
 	struct wal_stream *xstream =
 		container_of(stream, struct wal_stream, base);

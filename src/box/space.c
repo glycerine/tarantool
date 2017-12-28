@@ -31,14 +31,17 @@
 #include "space.h"
 #include <stdlib.h>
 #include <string.h>
+#include "index.h"
 #include "tuple.h"
 #include "tuple_compare.h"
+#include "tuple_update.h"
 #include "trigger.h"
 #include "user.h"
 #include "session.h"
 #include "xrow.h"
 #include "iproto_constants.h"
 #include "sequence.h"
+#include "txn.h"
 
 int
 access_check_space(struct space *space, uint8_t access)
@@ -109,6 +112,7 @@ space_create(struct space *space, struct engine *engine,
 	space->engine = engine;
 	space->index_count = index_count;
 	space->index_id_max = index_id_max;
+	rlist_create(&space->before_replace);
 	rlist_create(&space->on_replace);
 	rlist_create(&space->on_stmt_begin);
 	space->run_triggers = true;
@@ -174,6 +178,7 @@ space_delete(struct space *space)
 	free(space->index_map);
 	if (space->format != NULL)
 		tuple_format_unref(space->format);
+	trigger_destroy(&space->before_replace);
 	trigger_destroy(&space->on_replace);
 	trigger_destroy(&space->on_stmt_begin);
 	space_def_delete(space->def);
@@ -416,16 +421,244 @@ request_handle_sequence(struct request *request, struct space *space)
 	return 0;
 }
 
+/**
+ * Given old and new tuples, initialize the corresponding
+ * request to be written to WAL.
+ */
+static int
+request_create_from_tuple(struct request *request, struct space *space,
+			  struct tuple *old_tuple, struct tuple *new_tuple)
+{
+	memset(request, 0, sizeof(*request));
+	if (old_tuple == new_tuple) {
+		/*
+		 * Old and new tuples are the same,
+		 * turn this request into no-op.
+		 */
+		request->type = IPROTO_OK;
+		return 0;
+	}
+	request->space_id = space->def->id;
+	if (new_tuple == NULL) {
+		uint32_t size, key_size;
+		const char *data = tuple_data_range(old_tuple, &size);
+		request->key = tuple_extract_key_raw(data, data + size,
+				space->index[0]->def->key_def, &key_size);
+		if (request->key == NULL)
+			return -1;
+		request->key_end = request->key + key_size;
+		request->type = IPROTO_DELETE;
+	} else {
+		uint32_t size;
+		const char *data = tuple_data_range(new_tuple, &size);
+		char *buf = region_alloc(&fiber()->gc, size);
+		if (buf == NULL)
+			return -1;
+		memcpy(buf, data, size);
+		request->tuple = buf;
+		request->tuple_end = buf + size;
+		request->type = IPROTO_REPLACE;
+	}
+	return 0;
+}
+
+/**
+ * Run BEFORE triggers registered for a space.
+ */
+static int
+space_run_before_replace(struct space *space, struct txn *txn,
+			 struct request *request)
+{
+	if (space->index_count == 0) {
+		/* Empty space, nothing to do. */
+		return 0;
+	}
+
+	struct region *gc = &fiber()->gc;
+	enum iproto_type type = request->type;
+	struct index *pk = space->index[0];
+
+	const char *key;
+	uint32_t part_count;
+	struct index *index;
+
+	/*
+	 * Lookup the old tuple.
+	 */
+	if (type == IPROTO_UPDATE || type == IPROTO_DELETE) {
+		index = index_find_unique(space, request->index_id);
+		if (index == NULL)
+			return -1;
+		key = request->key;
+		part_count = mp_decode_array(&key);
+		if (exact_key_validate(index->def->key_def,
+				       key, part_count) != 0)
+			return -1;
+	} else if (type == IPROTO_INSERT || type == IPROTO_REPLACE ||
+		   type == IPROTO_UPSERT) {
+		index = pk;
+		key = tuple_extract_key_raw(request->tuple, request->tuple_end,
+					    index->def->key_def, NULL);
+		if (key == NULL)
+			return -1;
+		part_count = mp_decode_array(&key);
+	} else {
+		/* Unknown request type, nothing to do. */
+		return 0;
+	}
+
+	struct tuple *old_tuple;
+	if (index_get(index, key, part_count, &old_tuple) != 0)
+		return -1;
+
+	/*
+	 * Create the new tuple.
+	 */
+	uint32_t new_size, old_size;
+	const char *new_data, *new_data_end;
+	const char *old_data, *old_data_end;
+
+	switch (request->type) {
+	case IPROTO_INSERT:
+	case IPROTO_REPLACE:
+		new_data = request->tuple;
+		new_data_end = request->tuple_end;
+		break;
+	case IPROTO_UPDATE:
+		if (old_tuple == NULL) {
+			/* Nothing to update. */
+			return 0;
+		}
+		old_data = tuple_data_range(old_tuple, &old_size);
+		old_data_end = old_data + old_size;
+		new_data = tuple_update_execute(region_aligned_alloc_cb, gc,
+					request->tuple, request->tuple_end,
+					old_data, old_data_end, &new_size,
+					request->index_base, NULL);
+		if (new_data == NULL)
+			return -1;
+		new_data_end = new_data + new_size;
+		break;
+	case IPROTO_DELETE:
+		new_data = new_data_end = NULL;
+		break;
+	case IPROTO_UPSERT:
+		if (old_tuple == NULL) {
+			/*
+			 * Turn UPSERT into INSERT, but still check
+			 * provided operations.
+			 */
+			new_data = request->tuple;
+			new_data_end = request->tuple_end;
+			if (tuple_update_check_ops(region_aligned_alloc_cb, gc,
+					request->ops, request->ops_end,
+					request->index_base) != 0)
+				return -1;
+			break;
+		}
+		old_data = tuple_data_range(old_tuple, &old_size);
+		old_data_end = old_data + old_size;
+		new_data = tuple_upsert_execute(region_aligned_alloc_cb, gc,
+					request->ops, request->ops_end,
+					old_data, old_data_end, &new_size,
+					request->index_base, false, NULL);
+		new_data_end = new_data + new_size;
+		break;
+	default:
+		unreachable();
+	}
+
+	struct tuple *new_tuple = NULL;
+	if (new_data != NULL) {
+		new_tuple = tuple_new(tuple_format_runtime,
+				      new_data, new_data_end);
+		if (new_tuple == NULL)
+			return -1;
+		tuple_ref(new_tuple);
+	}
+
+	assert(old_tuple != NULL || new_tuple != NULL);
+
+	/*
+	 * Execute all registered BEFORE triggers.
+	 */
+	struct txn_stmt *stmt = txn_current_stmt(txn);
+	assert(stmt->old_tuple == NULL && stmt->new_tuple == NULL);
+	stmt->old_tuple = old_tuple;
+	stmt->new_tuple = new_tuple;
+
+	int rc = trigger_run(&space->before_replace, txn);
+
+	/*
+	 * The trigger can't change the old tuple,
+	 * but it may replace the new tuple.
+	 */
+	bool request_changed = (stmt->new_tuple != new_tuple);
+	new_tuple = stmt->new_tuple;
+	assert(stmt->old_tuple == old_tuple);
+	stmt->old_tuple = NULL;
+	stmt->new_tuple = NULL;
+
+	if (rc != 0)
+		goto out;
+
+	/*
+	 * We don't allow to change the value of the primary key
+	 * in the same statement.
+	 */
+	if (old_tuple != NULL && new_tuple != NULL &&
+	    tuple_compare(old_tuple, new_tuple, pk->def->key_def) != 0) {
+		diag_set(ClientError, ER_CANT_UPDATE_PRIMARY_KEY,
+			 pk->def->name, space->def->name);
+		rc = -1;
+		goto out;
+	}
+
+	/*
+	 * The trigger changed the resulting tuple.
+	 * Fix the request to conform.
+	 */
+	if (request_changed) {
+		rc = request_create_from_tuple(request, space,
+					       old_tuple, new_tuple);
+	}
+out:
+	if (new_tuple != NULL)
+		tuple_unref(new_tuple);
+	return rc;
+}
+
 int
 space_execute_dml(struct space *space, struct txn *txn,
 		  struct request *request, struct tuple **result)
 {
+	if (unlikely(space->sequence != NULL) &&
+	    (request->type == IPROTO_INSERT ||
+	     request->type == IPROTO_REPLACE)) {
+		/*
+		 * The space has a sequence associated with it.
+		 * If the tuple has 'nil' for the primary key,
+		 * we should replace it with the next sequence
+		 * value.
+		 */
+		if (request_handle_sequence(request, space) != 0)
+			return -1;
+	}
+
+	if (unlikely(!rlist_empty(&space->before_replace) &&
+		     space->run_triggers)) {
+		/*
+		 * Call BEFORE triggers if any before dispatching
+		 * the request. Note, it may change the request
+		 * type and arguments.
+		 */
+		if (space_run_before_replace(space, txn, request) != 0)
+			return -1;
+	}
+
 	switch (request->type) {
 	case IPROTO_INSERT:
 	case IPROTO_REPLACE:
-		if (space->sequence != NULL &&
-		    request_handle_sequence(request, space) != 0)
-			return -1;
 		if (space->vtab->execute_replace(space, txn,
 						 request, result) != 0)
 			return -1;

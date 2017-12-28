@@ -260,7 +260,7 @@ static int
 lbox_session_on_connect(struct lua_State *L)
 {
 	return lbox_trigger_reset(L, 2, &session_on_connect,
-				  lbox_push_on_connect_event);
+				  lbox_push_on_connect_event, NULL);
 }
 
 static int
@@ -276,7 +276,7 @@ static int
 lbox_session_on_disconnect(struct lua_State *L)
 {
 	return lbox_trigger_reset(L, 2, &session_on_disconnect,
-				  lbox_push_on_connect_event);
+				  lbox_push_on_connect_event, NULL);
 }
 
 static int
@@ -292,7 +292,7 @@ static int
 lbox_session_on_auth(struct lua_State *L)
 {
 	return lbox_trigger_reset(L, 2, &session_on_auth,
-				  lbox_push_on_auth_event);
+				  lbox_push_on_auth_event, NULL);
 }
 
 static int

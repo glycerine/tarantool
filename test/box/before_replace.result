@@ -1,0 +1,285 @@
+s = box.schema.space.create('test')
+---
+...
+_ = s:create_index('primary')
+---
+...
+_ = s:create_index('secondary', {unique = false, parts = {2, 'unsigned'}})
+---
+...
+function fail(old, new) error('fail') end
+---
+...
+function save(old, new) old_tuple = old new_tuple = new end
+---
+...
+function nop(old, new) return new end
+---
+...
+function ignore(old, new) return old end
+---
+...
+function delete(old, new) return nil end
+---
+...
+function update(old, new) return box.tuple.update(new, {{'+', 3, 1}}) end
+---
+...
+function bad_update(old, new) return box.tuple.update(new, {{'+', 1, 1}}) end
+---
+...
+-- Exception in trigger.
+type(s:before_replace(fail))
+---
+- function
+...
+s:insert{1, 1}
+---
+- error: '[string "function fail(old, new) error(''fail'') end "]:1: fail'
+...
+s:select()
+---
+- []
+...
+s:before_replace(nil, fail)
+---
+...
+-- Check 'old' and 'new' trigger arguments.
+old_tuple = nil
+---
+...
+new_tuple = nil
+---
+...
+type(s:before_replace(save))
+---
+- function
+...
+s:insert{1, 1}
+---
+- [1, 1]
+...
+old_tuple, new_tuple
+---
+- null
+- [1, 1]
+...
+s:replace{1, 2}
+---
+- [1, 2]
+...
+old_tuple, new_tuple
+---
+- [1, 1]
+- [1, 2]
+...
+s:update(1, {{'+', 2, 1}})
+---
+- [1, 3]
+...
+old_tuple, new_tuple
+---
+- [1, 2]
+- [1, 3]
+...
+s:upsert({1, 1}, {{'=', 2, 1}})
+---
+...
+old_tuple, new_tuple
+---
+- [1, 3]
+- [1, 1]
+...
+s:upsert({2, 2}, {{'=', 2, 2}})
+---
+...
+old_tuple, new_tuple
+---
+- null
+- [2, 2]
+...
+s:select()
+---
+- - [1, 1]
+  - [2, 2]
+...
+s:delete(1)
+---
+- [1, 1]
+...
+old_tuple, new_tuple
+---
+- [1, 1]
+- null
+...
+s:delete(2)
+---
+- [2, 2]
+...
+old_tuple, new_tuple
+---
+- [2, 2]
+- null
+...
+s:select()
+---
+- []
+...
+s:before_replace(nil, save)
+---
+...
+-- Returning 'new' from trigger doesn't affect statement.
+type(s:before_replace(nop))
+---
+- function
+...
+s:insert{1, 1}
+---
+- [1, 1]
+...
+s:update(1, {{'+', 2, 1}})
+---
+- [1, 2]
+...
+s:select()
+---
+- - [1, 2]
+...
+s:delete(1)
+---
+- [1, 2]
+...
+s:select()
+---
+- []
+...
+s:before_replace(nil, nop)
+---
+...
+-- Returning 'old' from trigger skips statement.
+s:insert{1, 1}
+---
+- [1, 1]
+...
+type(s:before_replace(ignore))
+---
+- function
+...
+s:insert{2, 2}
+---
+...
+s:update(1, {{'+', 2, 1}})
+---
+...
+s:delete(1)
+---
+...
+s:select()
+---
+- - [1, 1]
+...
+s:before_replace(nil, ignore)
+---
+...
+s:delete(1)
+---
+- [1, 1]
+...
+-- Returning nil from trigger turns statement into DELETE.
+s:insert{1, 1}
+---
+- [1, 1]
+...
+type(s:before_replace(delete))
+---
+- function
+...
+s:replace{1, 2}
+---
+- [1, 1]
+...
+s:select()
+---
+- []
+...
+s:before_replace(nil, delete)
+---
+...
+-- Update statement from trigger.
+type(s:before_replace(update))
+---
+- function
+...
+s:insert{1, 1, 1}
+---
+- [1, 1, 2]
+...
+s:update(1, {{'+', 2, 1}})
+---
+- [1, 2, 3]
+...
+s:select()
+---
+- - [1, 2, 3]
+...
+s:before_replace(nil, update)
+---
+...
+s:delete(1)
+---
+- [1, 2, 3]
+...
+-- Update of the primary key from trigger is forbidden.
+s:insert{1, 1}
+---
+- [1, 1]
+...
+type(s:before_replace(bad_update))
+---
+- function
+...
+s:replace{1, 2}
+---
+- error: Attempt to modify a tuple field which is part of index 'primary' in space
+    'test'
+...
+s:before_replace(nil, bad_update)
+---
+...
+s:delete(1)
+---
+- [1, 1]
+...
+-- Stacking triggers.
+old_tuple = nil
+---
+...
+new_tuple = nil
+---
+...
+type(s:before_replace(save))
+---
+- function
+...
+type(s:before_replace(update))
+---
+- function
+...
+s:insert{1, 1, 1}
+---
+- [1, 1, 2]
+...
+old_tuple, new_tuple
+---
+- null
+- [1, 1, 2]
+...
+s:before_replace(nil, save)
+---
+...
+s:before_replace(nil, update)
+---
+...
+s:drop()
+---
+...

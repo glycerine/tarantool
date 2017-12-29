@@ -170,7 +170,6 @@ txn_begin_stmt(struct space *space)
 	if (stmt == NULL)
 		goto fail;
 	stmt->space = space;
-	stmt->space_id = space->def->id;
 	if (engine_begin_statement(engine, txn) != 0)
 		goto fail;
 

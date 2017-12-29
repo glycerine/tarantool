@@ -748,12 +748,6 @@ memtx_init_system_space(struct space *space)
 	memtx_space_do_add_primary_key(space, MEMTX_OK);
 }
 
-static void
-memtx_init_ephemeral_space(struct space *space)
-{
-	memtx_space_do_add_primary_key(space, MEMTX_OK);
-}
-
 static int
 memtx_space_build_secondary_key(struct space *old_space,
 				struct space *new_space,
@@ -892,6 +886,13 @@ memtx_space_commit_alter(struct space *old_space, struct space *new_space)
 
 /* }}} DDL */
 
+/**
+ * Forward declaration since it uses ephemeral vtab, which in its turn
+ * contains functions from memtx vtab.
+ */
+static void
+memtx_init_ephemeral_space(struct space *space);
+
 static const struct space_vtab memtx_space_vtab = {
 	/* .destroy = */ memtx_space_destroy,
 	/* .bsize = */ memtx_space_bsize,
@@ -962,4 +963,130 @@ memtx_space_new(struct memtx_engine *memtx,
 	memtx_space->bsize = 0;
 	memtx_space->replace = memtx_space_replace_no_keys;
 	return (struct space *)memtx_space;
+}
+
+/**
+ * Set of ephemeral functions. Substitution of vtab occurs when
+ * ephemeral space is initializing. They are similar to original
+ * memtx functions, except for transaction processing.
+ * Ephemeral spaces shouldn't handle transactions in any way, since they
+ * are used only for internal routine. Moreover, ephemeral spaces
+ * can be created and destroyed within one transaction. Thus, SQL interface
+ * passes NULL instead of txn struct, so it is enough to create
+ * surrogate txn_stmt on stack to support original API.
+ */
+static int
+memtx_ephemeral_space_replace(struct space *space, struct txn_stmt *stmt,
+			      enum dup_replace_mode mode)
+{
+	struct tuple *old_tuple = stmt->old_tuple;
+	struct tuple *new_tuple = stmt->new_tuple;
+
+	/**
+	 * Update only primary key, since ephemeral spaces don't have any
+	 * secondary keys by definition.
+	 */
+	struct index *pk = index_find(space, 0 /* PK */);
+	if (pk == NULL)
+		return -1;
+	assert(pk->def->opts.is_unique);
+
+	if (index_replace(pk, old_tuple, new_tuple, mode, &old_tuple) != 0)
+		return -1;
+	assert(old_tuple || new_tuple);
+
+	memtx_space_update_bsize(space, old_tuple, new_tuple);
+	return 0;
+}
+
+static int
+memtx_ephemeral_space_execute_replace(struct space *space, struct txn *txn,
+				      struct request *request,
+				      struct tuple **result)
+{
+	/* Unused due to the lack of transaction support. */
+	(void)result;
+	(void)txn;
+	struct memtx_space *memtx_space = (struct memtx_space *)space;
+	struct txn_stmt stmt;
+	stmt.old_tuple = NULL;
+	enum dup_replace_mode mode = dup_replace_mode(request->type);
+	stmt.new_tuple = memtx_tuple_new(space->format, request->tuple,
+					 request->tuple_end);
+	if (stmt.new_tuple == NULL)
+		return -1;
+	tuple_ref(stmt.new_tuple);
+	if (memtx_space->replace(space, &stmt, mode) != 0)
+		return -1;
+	return 0;
+}
+
+/**
+ * This function works similarly to original memtx_space_execute_delete(),
+ * except for checking tuple with exact_key_validate(). Tuple checking is
+ * omitted due to ability of ephemeral spaces to hold nulls in primary key.
+ * Generally speaking, it is not correct behaviour owing to ambiguity when
+ * fetching/deleting tuple from space with several tuples containing nulls in PK.
+ * On the other hand, ephemeral spaces are used only for internal needs,
+ * so if it is guaranteed that no such situation occur(when several tuples with
+ * nulls in PK exist), it is OK to allow insertion nulls in PK.
+ */
+static int
+memxtx_ephemeral_space_execute_delete(struct space *space, struct txn *txn,
+				      struct request *request,
+				      struct tuple **result)
+{
+	(void)result;
+	(void)txn;
+	struct memtx_space *memtx_space = (struct memtx_space *)space;
+	struct txn_stmt stmt;
+	stmt.new_tuple = NULL;
+
+	struct index *pk = index_find_unique(space, request->index_id);
+	if (pk == NULL)
+		return -1;
+	const char *key = request->key;
+	uint32_t part_count = mp_decode_array(&key);
+	if (index_get(pk, key, part_count, &stmt.old_tuple) != 0)
+		return -1;
+	if (stmt.old_tuple != NULL &&
+	    memtx_space->replace(space, &stmt, DUP_REPLACE_OR_INSERT) != 0)
+		return -1;
+	return 0;
+}
+
+static const struct space_vtab memtx_ephemeral_space_vtab = {
+	/* .destroy = */ memtx_space_destroy,
+	/* .bsize = */ memtx_space_bsize,
+	/* .apply_initial_join_row = */ memtx_space_apply_initial_join_row,
+	/* .execute_replace = */ memtx_ephemeral_space_execute_replace,
+	/* .execute_delete = */ memxtx_ephemeral_space_execute_delete,
+	/* .execute_update = */ memtx_space_execute_update,
+	/* .execute_upsert = */ memtx_space_execute_upsert,
+	/* .init_system_space = */ memtx_init_system_space,
+	/* .init_ephemeral_space = */ memtx_init_ephemeral_space,
+	/* .check_index_def = */ memtx_space_check_index_def,
+	/* .create_index = */ memtx_space_create_index,
+	/* .add_primary_key = */ memtx_space_add_primary_key,
+	/* .drop_primary_key = */ memtx_space_drop_primary_key,
+	/* .check_format  = */ memtx_space_check_format,
+	/* .build_secondary_key = */ memtx_space_build_secondary_key,
+	/* .prepare_truncate = */ memtx_space_prepare_truncate,
+	/* .commit_truncate = */ memtx_space_commit_truncate,
+	/* .prepare_alter = */ memtx_space_prepare_alter,
+	/* .commit_alter = */ memtx_space_commit_alter,
+};
+
+static void
+memtx_init_ephemeral_space(struct space *space)
+{
+	memtx_space_do_add_primary_key(space, MEMTX_OK);
+	/**
+	 * Substitute vtab and replace operation in order to handle deletion
+	 * on tuples which may contain nulls in PK and avoid any
+	 * transaction routine.
+	 */
+	space->vtab = &memtx_ephemeral_space_vtab;
+	((struct memtx_space*)space)->replace =
+		memtx_ephemeral_space_replace;
 }

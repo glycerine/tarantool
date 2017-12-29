@@ -62,8 +62,6 @@ struct txn_stmt {
 	struct space *space;
 	struct tuple *old_tuple;
 	struct tuple *new_tuple;
-	/** Workaround for ephemeral tables. Should be removed later. */
-	uint32_t space_id;
 	/** Engine savepoint for the start of this statement. */
 	void *engine_savepoint;
 	/** Redo info: the binary log row */

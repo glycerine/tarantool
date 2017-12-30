@@ -195,10 +195,10 @@ sqlite3_blob_open(sqlite3 * db,	/* The database connection */
 
 		sqlite3BtreeEnterAll(db);
 		pTab = sqlite3LocateTable(pParse, 0, zTable);
-		if (pTab && !HasRowid(pTab)) {
+		if (pTab) {
 			pTab = 0;
 			sqlite3ErrorMsg(pParse,
-					"cannot open table without rowid: %s",
+					"cannot open table: %s",
 					zTable);
 		}
 #ifndef SQLITE_OMIT_VIEW

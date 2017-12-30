@@ -1576,7 +1576,6 @@ struct Table {
 #endif
 
 /* Does the table have a rowid */
-#define HasRowid(X)     (((X)->tabFlags & TF_WithoutRowid)==0)
 #define VisibleRowid(X) (((X)->tabFlags & TF_NoVisibleRowid)==0)
 
 /*

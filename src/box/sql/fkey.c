@@ -432,13 +432,6 @@ fkLookupParent(Parse * pParse,	/* Parse context */
 				sqlite3VdbeChangeP5(v, SQLITE_NOTNULL);
 			}
 
-			sqlite3OpenTable(pParse, iCur, pTab, OP_OpenRead);
-			sqlite3VdbeAddOp3(v, OP_NotExists, iCur, 0, regTemp);
-			VdbeCoverage(v);
-			sqlite3VdbeGoto(v, iOk);
-			sqlite3VdbeJumpHere(v, sqlite3VdbeCurrentAddr(v) - 2);
-			sqlite3VdbeJumpHere(v, iMustBeInt);
-			sqlite3ReleaseTempReg(pParse, regTemp);
 		} else {
 			int nCol = pFKey->nCol;
 			int regTemp = sqlite3GetTempRange(pParse, nCol);

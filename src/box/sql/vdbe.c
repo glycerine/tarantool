@@ -517,8 +517,6 @@ memTracePrint(Mem *p)
 	} else if (p->flags & MEM_Real) {
 		printf(" r:%g", p->u.r);
 #endif
-	} else if (p->flags & MEM_RowSet) {
-		printf(" (rowset)");
 	} else {
 		char zBuf[200];
 		sqlite3VdbeMemPrettyPrint(p, zBuf);
@@ -631,7 +629,6 @@ int sqlite3VdbeExec(Vdbe *p)
 	Mem *pIn3 = 0;             /* 3rd input operand */
 	Mem *pOut = 0;             /* Output operand */
 	int *aPermute = 0;         /* Permutation of columns for OP_Compare */
-	i64 lastRowid = db->lastRowid;  /* Saved value of the last insert ROWID */
 #ifdef VDBE_PROFILE
 	u64 start;                 /* CPU clock count at start of opcode */
 #endif
@@ -1014,7 +1011,6 @@ case OP_Halt: {
 		p->nFrame--;
 		sqlite3VdbeSetChanges(db, p->nChange);
 		pcx = sqlite3VdbeFrameRestore(pFrame);
-		lastRowid = db->lastRowid;
 		if (pOp->p2==OE_Ignore) {
 			/* Instruction pcx is the OP_Program that invoked the sub-program
 			 * currently being halted. If the p2 instruction of this OP_Halt
@@ -1737,9 +1733,7 @@ case OP_Function: {
 #endif
 	MemSetTypeFlag(pCtx->pOut, MEM_Null);
 	pCtx->fErrorOrAux = 0;
-	db->lastRowid = lastRowid;
 	(*pCtx->pFunc->xSFunc)(pCtx, pCtx->argc, pCtx->argv);/* IMP: R-24505-23230 */
-	lastRowid = db->lastRowid;  /* Remember rowid changes made by xSFunc */
 
 	/* If the function returned an error, throw an exception */
 	if (pCtx->fErrorOrAux) {
@@ -3430,12 +3424,6 @@ case OP_OpenWrite:
 #endif
 	rc = sqlite3BtreeCursor(pX, p2, wrFlag, pKeyInfo, pCur->uc.pCursor);
 	pCur->pKeyInfo = pKeyInfo;
-	/* Set the VdbeCursor.isTable variable. Previous versions of
-	 * SQLite used to check if the root-page flags were sane at this point
-	 * and report database corruption if they were not, but this check has
-	 * since moved into the btree layer.
-	 */
-	pCur->isTable = pOp->p4type!=P4_KEYINFO;
 
 			open_cursor_set_hints:
 	assert(OPFLAG_BULKCSR==BTREE_BULKLOAD);
@@ -3487,11 +3475,9 @@ case OP_OpenTEphemeral: {
 			sqlite3BtreeCursorEphemeral(pCx->pBtx, pgno, BTREE_WRCSR, pKeyInfo,
 						    pCx->uc.pCursor);
 		}
-		pCx->isTable = 0;
 	} else {
 		sqlite3BtreeCursorEphemeral(pCx->pBtx, 1, BTREE_WRCSR, 0,
 					    pCx->uc.pCursor);
-		pCx->isTable = 1;
 	}
 	rc = tarantoolSqlite3EphemeralCreate(pCx->uc.pCursor, pOp->p2,
 					     pOp->p4.pKeyInfo->aColl[0]);
@@ -3566,7 +3552,6 @@ case OP_OpenPseudo: {
 	if (pCx==0) goto no_mem;
 	pCx->nullRow = 1;
 	pCx->uc.pseudoTableReg = pOp->p2;
-	pCx->isTable = 1;
 	assert(pOp->p5==0);
 	break;
 }
@@ -3729,8 +3714,6 @@ case OP_SeekGT: {       /* jump, in3 */
 #endif
 	iKey = 0;
 	reg_ipk = pOp->p5;
-	if (pC->isTable)
-		reg_ipk = pOp->p3;
 
 	if (reg_ipk > 0) {
 
@@ -3781,62 +3764,50 @@ case OP_SeekGT: {       /* jump, in3 */
 			}
 		}
 	}
-	if (pC->isTable) {
-		/* The BTREE_SEEK_EQ flag is only set on index cursors */
-		assert(sqlite3BtreeCursorHasHint(pC->uc.pCursor, BTREE_SEEK_EQ)==0
-		       || CORRUPT_DB);
-		assert(reg_ipk);
-		rc = sqlite3BtreeMovetoUnpacked(pC->uc.pCursor, 0, (u64)iKey, 0, &res);
-		pC->movetoTarget = iKey;  /* Used by OP_Delete */
-		if (rc!=SQLITE_OK) {
-			goto abort_due_to_error;
-		}
-	} else {
-		/* For a cursor with the BTREE_SEEK_EQ hint, only the OP_SeekGE and
-		 * OP_SeekLE opcodes are allowed, and these must be immediately followed
-		 * by an OP_IdxGT or OP_IdxLT opcode, respectively, with the same key.
-		 */
-		if (sqlite3BtreeCursorHasHint(pC->uc.pCursor, BTREE_SEEK_EQ)) {
-			eqOnly = 1;
-			assert(pOp->opcode==OP_SeekGE || pOp->opcode==OP_SeekLE);
-			assert(pOp[1].opcode==OP_IdxLT || pOp[1].opcode==OP_IdxGT);
-			assert(pOp[1].p1==pOp[0].p1);
-			assert(pOp[1].p2==pOp[0].p2);
-			assert(pOp[1].p3==pOp[0].p3);
-			assert(pOp[1].p4.i==pOp[0].p4.i);
-		}
+	/* For a cursor with the BTREE_SEEK_EQ hint, only the OP_SeekGE and
+	 * OP_SeekLE opcodes are allowed, and these must be immediately followed
+	 * by an OP_IdxGT or OP_IdxLT opcode, respectively, with the same key.
+	 */
+	if (sqlite3BtreeCursorHasHint(pC->uc.pCursor, BTREE_SEEK_EQ)) {
+		eqOnly = 1;
+		assert(pOp->opcode==OP_SeekGE || pOp->opcode==OP_SeekLE);
+		assert(pOp[1].opcode==OP_IdxLT || pOp[1].opcode==OP_IdxGT);
+		assert(pOp[1].p1==pOp[0].p1);
+		assert(pOp[1].p2==pOp[0].p2);
+		assert(pOp[1].p3==pOp[0].p3);
+		assert(pOp[1].p4.i==pOp[0].p4.i);
+	}
 
-		nField = pOp->p4.i;
-		assert(pOp->p4type==P4_INT32);
-		assert(nField>0);
-		r.pKeyInfo = pC->pKeyInfo;
-		r.nField = (u16)nField;
+	nField = pOp->p4.i;
+	assert(pOp->p4type==P4_INT32);
+	assert(nField>0);
+	r.pKeyInfo = pC->pKeyInfo;
+	r.nField = (u16)nField;
 
-		if (reg_ipk > 0) {
-			aMem[reg_ipk].u.i = iKey;
-			aMem[reg_ipk].flags = MEM_Int;
-		}
+	if (reg_ipk > 0) {
+		aMem[reg_ipk].u.i = iKey;
+		aMem[reg_ipk].flags = MEM_Int;
+	}
 
-		r.default_rc = ((1 & (oc - OP_SeekLT)) ? -1 : +1);
-		assert(oc!=OP_SeekGT || r.default_rc==-1);
-		assert(oc!=OP_SeekLE || r.default_rc==-1);
-		assert(oc!=OP_SeekGE || r.default_rc==+1);
-		assert(oc!=OP_SeekLT || r.default_rc==+1);
+	r.default_rc = ((1 & (oc - OP_SeekLT)) ? -1 : +1);
+	assert(oc!=OP_SeekGT || r.default_rc==-1);
+	assert(oc!=OP_SeekLE || r.default_rc==-1);
+	assert(oc!=OP_SeekGE || r.default_rc==+1);
+	assert(oc!=OP_SeekLT || r.default_rc==+1);
 
-		r.aMem = &aMem[pOp->p3];
+	r.aMem = &aMem[pOp->p3];
 #ifdef SQLITE_DEBUG
-		{ int i; for(i=0; i<r.nField; i++) assert(memIsValid(&r.aMem[i])); }
+	{ int i; for(i=0; i<r.nField; i++) assert(memIsValid(&r.aMem[i])); }
 #endif
-		r.eqSeen = 0;
-		r.opcode = oc;
-		rc = sqlite3BtreeMovetoUnpacked(pC->uc.pCursor, &r, 0, 0, &res);
-		if (rc!=SQLITE_OK) {
-			goto abort_due_to_error;
-		}
-		if (eqOnly && r.eqSeen==0) {
-			assert(res!=0);
-			goto seek_not_found;
-		}
+	r.eqSeen = 0;
+	r.opcode = oc;
+	rc = sqlite3BtreeMovetoUnpacked(pC->uc.pCursor, &r, 0, 0, &res);
+	if (rc!=SQLITE_OK) {
+		goto abort_due_to_error;
+	}
+	if (eqOnly && r.eqSeen==0) {
+		assert(res!=0);
+		goto seek_not_found;
 	}
 	pC->deferredMoveto = 0;
 	pC->cacheStatus = CACHE_STALE;
@@ -3961,7 +3932,6 @@ case OP_Found: {        /* jump, in3 */
 	pIn3 = &aMem[pOp->p3];
 	assert(pC->eCurType==CURTYPE_BTREE);
 	assert(pC->uc.pCursor!=0);
-	assert(pC->isTable==0);
 	if (pOp->p4.i>0) {
 		r.pKeyInfo = pC->pKeyInfo;
 		r.nField = (u16)pOp->p4.i;
@@ -4166,32 +4136,12 @@ case OP_FCopy: {     /* out2 */
  */
 case OP_Delete: {
 	VdbeCursor *pC;
-	Table *pTab;
-	int opflags;
-
-	opflags = pOp->p2;
 	assert(pOp->p1>=0 && pOp->p1<p->nCursor);
 	pC = p->apCsr[pOp->p1];
 	assert(pC!=0);
 	assert(pC->eCurType==CURTYPE_BTREE);
 	assert(pC->uc.pCursor!=0);
 	assert(pC->deferredMoveto==0);
-
-	/* If the update-hook or pre-update-hook will be invoked, set
-	 * local pTab to a copy
-	 * of p4.pTab. Finally, if p5 is true, indicating that this cursor was
-	 * last moved with OP_Next or OP_Prev, not Seek or NotFound, set
-	 * VdbeCursor.movetoTarget to the current rowid.
-	 */
-	if (pOp->p4type==P4_TABLE && HAS_UPDATE_HOOK(db)) {
-		assert(pOp->p4.pTab!=0);
-		pTab = pOp->p4.pTab;
-		if ((pOp->p5 & OPFLAG_SAVEPOSITION)!=0 && pC->isTable) {
-			pC->movetoTarget = sqlite3BtreeIntegerKey(pC->uc.pCursor);
-		}
-	} else {
-		pTab = 0;  /* Not needed.  Silence a compiler warning. */
-	}
 
 	/* Only flags that can be set are SAVEPOISTION and AUXDELETE */
 	assert((pOp->p5 & ~(OPFLAG_SAVEPOSITION|OPFLAG_AUXDELETE))==0);
@@ -4592,7 +4542,7 @@ case OP_Next:          /* jump */
 	assert(pC!=0);
 	assert(pC->deferredMoveto==0);
 	assert(pC->eCurType==CURTYPE_BTREE);
-	assert(res==0 || (res==1 && pC->isTable==0));
+	assert(res==0 || res==1);
 	testcase( res==1);
 	assert(pOp->opcode!=OP_Next || pOp->p4.xAdvance==sqlite3BtreeNext);
 	assert(pOp->opcode!=OP_Prev || pOp->p4.xAdvance==sqlite3BtreePrevious);
@@ -4674,7 +4624,6 @@ case OP_IdxInsert: {        /* in2 */
 	assert(pIn2->flags & MEM_Blob);
 	if (pOp->p5 & OPFLAG_NCHANGE) p->nChange++;
 	assert(pC->eCurType==CURTYPE_BTREE || pOp->opcode==OP_SorterInsert);
-	assert(pC->isTable==0);
 	rc = ExpandBlob(pIn2);
 	if (rc) goto abort_due_to_error;
 	if (pOp->opcode==OP_SorterInsert) {
@@ -5336,7 +5285,6 @@ case OP_Program: {        /* jump */
 
 	p->nFrame++;
 	pFrame->pParent = p->pFrame;
-	pFrame->lastRowid = lastRowid;
 	pFrame->nChange = p->nChange;
 	pFrame->nDbChange = p->db->nChange;
 	assert(pFrame->pAuxData==0);
@@ -6030,7 +5978,6 @@ abort_due_to_error:
 	 * top.
 	 */
 vdbe_return:
-	db->lastRowid = lastRowid;
 	testcase( nVmStep>0);
 	p->aCounter[SQLITE_STMTSTATUS_VM_STEP] += (int)nVmStep;
 	sqlite3VdbeLeave(p);

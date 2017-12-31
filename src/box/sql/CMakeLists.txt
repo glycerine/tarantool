@@ -76,7 +76,6 @@ add_library(sql STATIC
     printf.c
     random.c
     resolve.c
-    rowset.c
     select.c
     status.c
     table.c

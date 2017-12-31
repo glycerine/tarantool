@@ -134,7 +134,7 @@ local data = {
     {"20 ", 1, "SELECT DISTINCT * FROM t3"},
     {"21 ", 0, "SELECT DISTINCT c2 FROM t3"},
     {"22 ", 0, "SELECT DISTINCT * FROM (SELECT 1, 2, 3 UNION SELECT 4, 5, 6)"},
-    {"23 ", 1, "SELECT DISTINCT rowid FROM (SELECT 1, 2, 3 UNION SELECT 4, 5, 6)"},
+--    {"23 ", 1, "SELECT DISTINCT rowid FROM (SELECT 1, 2, 3 UNION SELECT 4, 5, 6)"},
 
 }
 

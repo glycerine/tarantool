@@ -2294,7 +2294,7 @@ static void yy_reduce(
 #line 194 "parse.y"
 {
   if( yymsp[0].minor.yy0.n==5 && sqlite3_strnicmp(yymsp[0].minor.yy0.z,"rowid",5)==0 ){
-    yymsp[-1].minor.yy92 = TF_WithoutRowid | TF_NoVisibleRowid;
+    (void)yymsp[-1].minor.yy92;
   }else{
     yymsp[-1].minor.yy92 = 0;
     sqlite3ErrorMsg(pParse, "unknown table option: %.*s", yymsp[0].minor.yy0.n, yymsp[0].minor.yy0.z);

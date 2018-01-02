@@ -101,7 +101,6 @@ struct VdbeCursor {
 #endif
 	Bool isEphemeral:1;	/* True for an ephemeral table */
 	Bool isOrdered:1;	/* True if the table is not BTREE_UNORDERED */
-	Btree *pBtx;		/* Separate file holding temporary table */
 	i64 seqCount;		/* Sequence counter */
 	int *aAltMap;		/* Mapping from table to index column numbers */
 

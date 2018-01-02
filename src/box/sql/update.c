@@ -148,7 +148,6 @@ sqlite3Update(Parse * pParse,		/* The parser context */
 	int regNewRowid = 0;	/* The new rowid */
 	int regNew = 0;		/* Content of the NEW.* table in triggers */
 	int regOld = 0;		/* Content of OLD.* table in triggers */
-	int regRowSet = 0;	/* Rowset of rows to be updated */
 	int regKey = 0;		/* composite PRIMARY KEY value */
 
 	memset(&sContext, 0, sizeof(sContext));
@@ -322,7 +321,6 @@ sqlite3Update(Parse * pParse,		/* The parser context */
 	sqlite3BeginWriteOperation(pParse, 1);
 
 	/* Allocate required registers. */
-	regRowSet = ++pParse->nMem;
 	regOldRowid = regNewRowid = ++pParse->nMem;
 	if (chngPk || pTrigger || hasFK) {
 		regOld = pParse->nMem + 1;

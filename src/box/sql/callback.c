@@ -422,15 +422,10 @@ sqlite3SchemaClear(void *p)
  * a new one if necessary.
  */
 Schema *
-sqlite3SchemaGet(sqlite3 * db, Btree * pBt)
+sqlite3SchemaGet(sqlite3 * db)
 {
 	Schema *p;
-	if (pBt) {
-		p = (Schema *) sqlite3BtreeSchema(pBt, sizeof(Schema),
-						  sqlite3SchemaClear);
-	} else {
-		p = (Schema *) sqlite3DbMallocZero(0, sizeof(Schema));
-	}
+	p = (Schema *) sqlite3DbMallocZero(0, sizeof(Schema));
 	if (!p) {
 		sqlite3OomFault(db);
 	} else if (0 == p->file_format) {

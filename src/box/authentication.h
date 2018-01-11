@@ -33,6 +33,16 @@
 
 #include <stdint.h>
 
+/**
+ * Result of authentication.
+ * Used in on_auth trigger
+ */
+struct auth_result {
+	const char *name;
+	bool success;
+};
+
+
 void
 authenticate(const char *user_name, uint32_t len, const char *tuple);
 

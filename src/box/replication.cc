@@ -52,6 +52,8 @@ uint32_t instance_id = REPLICA_ID_NIL;
 struct tt_uuid REPLICASET_UUID;
 
 double replication_timeout = 1.0; /* seconds */
+double replication_sync_lag; /* synchronization is disabled */
+int replication_connect_quorum = REPLICATION_CONNECT_QUORUM_ALL;
 
 typedef rb_tree(struct replica) replicaset_t;
 rb_proto(, replicaset_, replicaset_t, struct replica)
@@ -80,6 +82,28 @@ static replicaset_t replicaset;
  */
 static RLIST_HEAD(anon_replicas);
 
+/**
+ * Total number of replicas with attached appliers.
+ */
+static int applier_count;
+
+/**
+ * Number of appliers that have successfully connected
+ * and received their UUIDs.
+ */
+static int connected_applier_count;
+
+/**
+ * Number of appliers that have successfully synchronized
+ * to the master and hence contribute to the quorum.
+ */
+static int synced_applier_count;
+
+/**
+ * Signaled whenever an applier changes its state.
+ */
+static struct fiber_cond applier_state_cond;
+
 void
 replication_init(void)
 {
@@ -87,12 +111,14 @@ replication_init(void)
 		       sizeof(struct replica));
 	memset(&replicaset, 0, sizeof(replicaset));
 	replicaset_new(&replicaset);
+	fiber_cond_create(&applier_state_cond);
 	vclock_create(&replicaset_vclock);
 }
 
 void
 replication_free(void)
 {
+	fiber_cond_destroy(&applier_state_cond);
 	mempool_destroy(&replica_pool);
 }
 
@@ -118,6 +144,9 @@ replica_is_orphan(struct replica *replica)
 	       replica->relay == NULL;
 }
 
+static void
+replica_on_applier_state_f(struct trigger *trigger, void *event);
+
 static struct replica *
 replica_new(void)
 {
@@ -131,7 +160,9 @@ replica_new(void)
 	replica->relay = NULL;
 	replica->gc = NULL;
 	rlist_create(&replica->in_anon);
-	trigger_create(&replica->on_connect, NULL, NULL, NULL);
+	trigger_create(&replica->on_applier_state,
+		       replica_on_applier_state_f, NULL, NULL);
+	replica->is_synced = false;
 	return replica;
 }
 
@@ -193,22 +224,52 @@ replica_clear_id(struct replica *replica)
 }
 
 static void
-replica_on_receive_uuid(struct trigger *trigger, void *event)
+replica_set_applier(struct replica *replica, struct applier *applier)
 {
-	struct replica *replica = container_of(trigger,
-				struct replica, on_connect);
-	struct applier *applier = (struct applier *)event;
+	assert(replica->applier == NULL);
+	assert(!replica->is_synced);
+	replica->applier = applier;
+	trigger_add(&replica->applier->on_state,
+		    &replica->on_applier_state);
+}
 
-	assert(tt_uuid_is_nil(&replica->uuid));
-	assert(replica->applier == applier);
+static void
+replica_clear_applier(struct replica *replica)
+{
+	assert(replica->applier != NULL);
+	replica->applier = NULL;
+	replica->is_synced = false;
+	trigger_clear(&replica->on_applier_state);
+}
 
-	if (applier->state != APPLIER_CONNECTED)
+static void
+replica_on_applier_sync(struct replica *replica)
+{
+	if (replica->is_synced)
 		return;
 
-	trigger_clear(trigger);
+	replica->is_synced = true;
+	assert(synced_applier_count < applier_count);
+	synced_applier_count++;
+
+	replicaset_check_quorum();
+}
+
+static void
+replica_on_applier_connect(struct replica *replica)
+{
+	struct applier *applier = replica->applier;
+
+	if (!tt_uuid_is_nil(&replica->uuid)) {
+		assert(tt_uuid_is_equal(&replica->uuid, &applier->uuid));
+		return;
+	}
 
 	assert(!tt_uuid_is_nil(&applier->uuid));
 	replica->uuid = applier->uuid;
+
+	assert(connected_applier_count < applier_count);
+	connected_applier_count++;
 
 	struct replica *orig = replicaset_search(&replicaset, replica);
 	if (orig != NULL && orig->applier != NULL) {
@@ -228,13 +289,38 @@ replica_on_receive_uuid(struct trigger *trigger, void *event)
 
 	if (orig != NULL) {
 		/* Use existing struct replica */
-		orig->applier = applier;
-		replica->applier = NULL;
+		replica_set_applier(orig, applier);
+		replica_clear_applier(replica);
 		replica_delete(replica);
 	} else {
 		/* Add a new struct replica */
 		replicaset_insert(&replicaset, replica);
 	}
+}
+
+static void
+replica_on_applier_state_f(struct trigger *trigger, void *event)
+{
+	(void)event;
+	struct replica *replica = container_of(trigger,
+			struct replica, on_applier_state);
+	switch (replica->applier->state) {
+	case APPLIER_CONNECTED:
+		replica_on_applier_connect(replica);
+		break;
+	case APPLIER_OFF:
+		/*
+		 * Connection to self, duplicate connection
+		 * to the same master, or the applier fiber
+		 * has been cancelled. Assume synced.
+		 */
+	case APPLIER_FOLLOW:
+		replica_on_applier_sync(replica);
+		break;
+	default:
+		break;
+	}
+	fiber_cond_signal(&applier_state_cond);
 }
 
 /**
@@ -249,6 +335,8 @@ replicaset_update(struct applier **appliers, int count)
 	replicaset_new(&uniq);
 	RLIST_HEAD(anon_replicas_new);
 	struct replica *replica, *next;
+	struct applier *applier;
+	int connected_count = 0;
 
 	auto uniq_guard = make_scoped_guard([&]{
 		replicaset_foreach_safe(&uniq, replica, next) {
@@ -259,9 +347,9 @@ replicaset_update(struct applier **appliers, int count)
 
 	/* Check for duplicate UUID */
 	for (int i = 0; i < count; i++) {
-		struct applier *applier = appliers[i];
+		applier = appliers[i];
 		replica = replica_new();
-		replica->applier = applier;
+		replica_set_applier(replica, applier);
 
 		if (applier->state != APPLIER_CONNECTED) {
 			/*
@@ -273,9 +361,6 @@ replicaset_update(struct applier **appliers, int count)
 			 * when it is finally connected.
 			 */
 			rlist_add_entry(&anon_replicas_new, replica, in_anon);
-			trigger_create(&replica->on_connect,
-				       replica_on_receive_uuid, NULL, NULL);
-			trigger_add(&applier->on_state, &replica->on_connect);
 			continue;
 		}
 
@@ -287,6 +372,7 @@ replicaset_update(struct applier **appliers, int count)
 				  "duplicate connection to the same replica");
 		}
 		replicaset_insert(&uniq, replica);
+		connected_count++;
 	}
 
 	/*
@@ -298,16 +384,17 @@ replicaset_update(struct applier **appliers, int count)
 	replicaset_foreach(replica) {
 		if (replica->applier == NULL)
 			continue;
-		applier_stop(replica->applier); /* cancels a background fiber */
-		applier_delete(replica->applier);
-		replica->applier = NULL;
+		applier = replica->applier;
+		replica_clear_applier(replica);
+		applier_stop(applier);
+		applier_delete(applier);
 	}
 	rlist_foreach_entry_safe(replica, &anon_replicas, in_anon, next) {
-		assert(replica->applier != NULL);
-		applier_stop(replica->applier);
-		applier_delete(replica->applier);
-		replica->applier = NULL;
+		applier = replica->applier;
+		replica_clear_applier(replica);
 		replica_delete(replica);
+		applier_stop(applier);
+		applier_delete(applier);
 	}
 	rlist_create(&anon_replicas);
 
@@ -318,18 +405,19 @@ replicaset_update(struct applier **appliers, int count)
 		struct replica *orig = replicaset_search(&replicaset, replica);
 		if (orig != NULL) {
 			/* Use existing struct replica */
-			orig->applier = replica->applier;
-			assert(tt_uuid_is_equal(&orig->uuid,
-						&orig->applier->uuid));
-			replica->applier = NULL;
-			replica_delete(replica); /* remove temporary object */
-			replica = orig;
+			replica_set_applier(orig, replica->applier);
+			replica_clear_applier(replica);
+			replica_delete(replica);
 		} else {
 			/* Add a new struct replica */
 			replicaset_insert(&replicaset, replica);
 		}
 	}
 	rlist_swap(&anon_replicas, &anon_replicas_new);
+
+	applier_count = count;
+	connected_applier_count = connected_count;
+	synced_applier_count = 0;
 
 	assert(replicaset_first(&uniq) == NULL);
 	replicaset_foreach_safe(&replicaset, replica, next) {
@@ -381,16 +469,14 @@ applier_on_connect_f(struct trigger *trigger, void *event)
 }
 
 void
-replicaset_connect(struct applier **appliers, int count, int quorum,
-		   double timeout)
+replicaset_connect(struct applier **appliers, int count,
+		   double timeout, bool connect_all)
 {
 	if (count == 0) {
 		/* Cleanup the replica set. */
 		replicaset_update(appliers, count);
 		return;
 	}
-
-	quorum = MIN(quorum, count);
 
 	/*
 	 * Simultaneously connect to remote peers to receive their UUIDs
@@ -426,15 +512,18 @@ replicaset_connect(struct applier **appliers, int count, int quorum,
 		applier_start(applier);
 	}
 
-	while (state.connected < quorum && count - state.failed >= quorum) {
+	while (state.connected < count) {
 		double wait_start = ev_monotonic_now(loop());
 		if (fiber_cond_wait_timeout(&state.wakeup, timeout) != 0)
 			break;
+		if (state.failed > 0 && connect_all)
+			break;
 		timeout -= ev_monotonic_now(loop()) - wait_start;
 	}
-	if (state.connected < quorum) {
+	if (state.connected < count) {
 		/* Timeout or connection failure. */
-		goto error;
+		if (connect_all)
+			goto error;
 	}
 
 	for (int i = 0; i < count; i++) {
@@ -468,6 +557,11 @@ error:
 void
 replicaset_follow(void)
 {
+	if (applier_count == 0) {
+		/* Replication is not configured. */
+		box_clear_orphan();
+		return;
+	}
 	struct replica *replica;
 	replicaset_foreach(replica) {
 		/* Resume connected appliers. */
@@ -478,6 +572,21 @@ replicaset_follow(void)
 		/* Restart appliers that failed to connect. */
 		applier_start(replica->applier);
 	}
+}
+
+void
+replicaset_sync(void)
+{
+	while (synced_applier_count < connected_applier_count)
+		fiber_cond_wait(&applier_state_cond);
+}
+
+void
+replicaset_check_quorum(void)
+{
+	int quorum = MIN(replication_connect_quorum, applier_count);
+	if (synced_applier_count >= quorum)
+		box_clear_orphan();
 }
 
 void

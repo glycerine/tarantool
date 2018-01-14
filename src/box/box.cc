@@ -103,13 +103,12 @@ static struct gc_consumer *backup_gc;
 static bool is_box_configured = false;
 static bool is_ro = true;
 
-static const int REPLICATION_CONNECT_QUORUM_ALL = INT_MAX;
-
 /**
- * Min number of masters to connect for configuration to succeed.
- * If set to REPLICATION_CONNECT_QUORUM_ALL, wait for all masters.
+ * The following flag is set if the instance failed to
+ * synchronize to a sufficient number of replicas to form
+ * a quorum and so was forced to switch to read-only mode.
  */
-static int replication_connect_quorum = REPLICATION_CONNECT_QUORUM_ALL;
+static bool is_orphan = true;
 
 /* Use the shared instance of xstream for all appliers */
 static struct xstream join_stream;
@@ -134,7 +133,7 @@ static int
 box_check_writable(void)
 {
 	/* box is only writable if box.cfg.read_only == false and */
-	if (is_ro) {
+	if (is_ro || is_orphan) {
 		diag_set(ClientError, ER_READONLY);
 		diag_log();
 		return -1;
@@ -219,6 +218,18 @@ bool
 box_is_ro(void)
 {
 	return is_ro;
+}
+
+void
+box_clear_orphan(void)
+{
+	if (!is_orphan)
+		return; /* nothing to do */
+
+	is_orphan = false;
+
+	/* Update the title to reflect the new status. */
+	title("running");
 }
 
 struct wal_stream {
@@ -376,6 +387,17 @@ box_check_replication_timeout(void)
 	return timeout;
 }
 
+static double
+box_check_replication_sync_lag(void)
+{
+	double lag = cfg_getd("replication_sync_lag");
+	if (lag < 0) {
+		tnt_raise(ClientError, ER_CFG, "replication_sync_lag",
+			  "the value must be greater or equal to 0");
+	}
+	return lag;
+}
+
 static int
 box_check_replication_connect_quorum(void)
 {
@@ -469,6 +491,7 @@ box_check_config()
 	box_check_replicaset_uuid(&uuid);
 	box_check_replication();
 	box_check_replication_timeout();
+	box_check_replication_sync_lag();
 	box_check_replication_connect_quorum();
 	box_check_readahead(cfg_geti("readahead"));
 	box_check_checkpoint_count(cfg_geti("checkpoint_count"));
@@ -527,7 +550,7 @@ cfg_get_replication(int *p_count)
  * don't start appliers.
  */
 static void
-box_sync_replication(double timeout, int quorum)
+box_sync_replication(double timeout, bool connect_all)
 {
 	int count = 0;
 	struct applier **appliers = cfg_get_replication(&count);
@@ -539,7 +562,7 @@ box_sync_replication(double timeout, int quorum)
 			applier_delete(appliers[i]); /* doesn't affect diag */
 	});
 
-	replicaset_connect(appliers, count, quorum, timeout);
+	replicaset_connect(appliers, count, timeout, connect_all);
 
 	guard.is_active = false;
 }
@@ -558,8 +581,7 @@ box_set_replication(void)
 
 	box_check_replication();
 	/* Try to connect to all replicas within the timeout period */
-	box_sync_replication(replication_connect_quorum_timeout(),
-			     replication_connect_quorum);
+	box_sync_replication(replication_connect_quorum_timeout(), true);
 	/* Follow replica */
 	replicaset_follow();
 }
@@ -571,9 +593,17 @@ box_set_replication_timeout(void)
 }
 
 void
+box_set_replication_sync_lag(void)
+{
+	replication_sync_lag = box_check_replication_sync_lag();
+}
+
+void
 box_set_replication_connect_quorum(void)
 {
 	replication_connect_quorum = box_check_replication_connect_quorum();
+	if (is_box_configured)
+		replicaset_check_quorum();
 }
 
 void
@@ -1546,11 +1576,11 @@ bootstrap_from_master(struct replica *master)
  * Bootstrap a new instance either as the first master in a
  * replica set or as a replica of an existing master.
  *
- * @param[out] start_vclock  the start vector time of the new
- * instance
+ * @param[out] is_bootstrap_leader  set if this instance is
+ *                                  the leader of a new cluster
  */
 static void
-bootstrap(const struct tt_uuid *replicaset_uuid)
+bootstrap(const struct tt_uuid *replicaset_uuid, bool *is_bootstrap_leader)
 {
 	/* Use the first replica by URI as a bootstrap leader */
 	struct replica *master = replicaset_first();
@@ -1567,6 +1597,7 @@ bootstrap(const struct tt_uuid *replicaset_uuid)
 		}
 	} else {
 		bootstrap_master(replicaset_uuid);
+		*is_bootstrap_leader = true;
 	}
 	if (engine_begin_checkpoint() ||
 	    engine_commit_checkpoint(&replicaset_vclock))
@@ -1636,6 +1667,7 @@ box_cfg_xc(void)
 	box_set_checkpoint_count();
 	box_set_too_long_threshold();
 	box_set_replication_timeout();
+	box_set_replication_sync_lag();
 	box_set_replication_connect_quorum();
 	xstream_create(&join_stream, apply_initial_join_row);
 	xstream_create(&subscribe_stream, apply_row);
@@ -1665,6 +1697,7 @@ box_cfg_xc(void)
 		 */
 		box_bind();
 	}
+	bool is_bootstrap_leader = false;
 	if (last_checkpoint_lsn >= 0) {
 		struct wal_stream wal_stream;
 		wal_stream_create(&wal_stream, cfg_geti64("rows_per_wal"));
@@ -1705,7 +1738,6 @@ box_cfg_xc(void)
 				&last_checkpoint_vclock);
 
 		engine_begin_final_recovery_xc();
-		title("orphan");
 		recovery_follow_local(recovery, &wal_stream.base, "hot_standby",
 				      cfg_getd("wal_dir_rescan_delay"));
 		title("hot_standby");
@@ -1756,9 +1788,11 @@ box_cfg_xc(void)
 
 		/** Begin listening only when the local recovery is complete. */
 		box_listen();
+
+		title("orphan");
+
 		/* Wait for the cluster to start up */
-		box_sync_replication(TIMEOUT_INFINITY,
-				     replication_connect_quorum);
+		box_sync_replication(replication_connect_quorum_timeout(), false);
 	} else {
 		if (!tt_uuid_is_nil(&instance_uuid))
 			INSTANCE_UUID = instance_uuid;
@@ -1770,6 +1804,8 @@ box_cfg_xc(void)
 		 */
 		box_listen();
 
+		title("orphan");
+
 		/*
 		 * Wait for the cluster to start up.
 		 *
@@ -1778,11 +1814,9 @@ box_cfg_xc(void)
 		 * receive the same replica set UUID when a new cluster
 		 * is deployed.
 		 */
-		box_sync_replication(TIMEOUT_INFINITY,
-				     REPLICATION_CONNECT_QUORUM_ALL);
-
+		box_sync_replication(TIMEOUT_INFINITY, true);
 		/* Bootstrap a new master */
-		bootstrap(&replicaset_uuid);
+		bootstrap(&replicaset_uuid, &is_bootstrap_leader);
 	}
 	fiber_gc();
 
@@ -1805,14 +1839,29 @@ box_cfg_xc(void)
 
 	rmean_cleanup(rmean_box);
 
+	/*
+	 * If this instance is a leader of a newly bootstrapped
+	 * cluster, it is uptodate by definition so leave the
+	 * 'orphan' mode right away to let it initialize cluster
+	 * schema.
+	 */
+	if (is_bootstrap_leader)
+		box_clear_orphan();
+
 	/* Follow replica */
 	replicaset_follow();
 
-	title("running");
 	say_info("ready to accept requests");
 
 	fiber_gc();
 	is_box_configured = true;
+
+	/*
+	 * Wait until this instance synchronizes with all
+	 * connected masters.
+	 */
+	if (!is_bootstrap_leader)
+		replicaset_sync();
 }
 
 void

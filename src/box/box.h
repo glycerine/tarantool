@@ -89,6 +89,14 @@ box_set_ro(bool ro);
 bool
 box_is_ro(void);
 
+/**
+ * Switch this instance from 'orphan' to 'running' state.
+ * Called on initial configuration as soon as this instance
+ * synchronizes with enough replicas to form a quorum.
+ */
+void
+box_clear_orphan(void);
+
 /** True if snapshot is in progress. */
 extern bool box_checkpoint_is_in_progress;
 /** Incremented with each next snapshot. */
@@ -155,6 +163,7 @@ void box_set_memtx_max_tuple_size(void);
 void box_set_vinyl_max_tuple_size(void);
 void box_set_vinyl_timeout(void);
 void box_set_replication_timeout(void);
+void box_set_replication_sync_lag(void);
 void box_set_replication_connect_quorum(void);
 
 extern "C" {

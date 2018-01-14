@@ -84,17 +84,34 @@
  * and is implemented in @file vclock.h
  */
 
+#include <limits.h>
+
 #if defined(__cplusplus)
 extern "C" {
 #endif /* defined(__cplusplus) */
 
 struct gc_consumer;
 
+static const int REPLICATION_CONNECT_QUORUM_ALL = INT_MAX;
+
 /**
  * Network timeout. Determines how often master and slave exchange
  * heartbeat messages. Set by box.cfg.replication_timeout.
  */
 extern double replication_timeout;
+
+/**
+ * Switch applier from "sync" to "follow" as soon as the replication
+ * lag is less than the value of the following variable.
+ */
+extern double replication_sync_lag;
+
+/**
+ * Minimal number of replicas to sync for this instance to switch
+ * to the write mode. If set to REPLICATION_CONNECT_QUORUM_ALL,
+ * wait for all configured masters.
+ */
+extern int replication_connect_quorum;
 
 /**
  * Wait for the given period of time before trying to reconnect
@@ -170,11 +187,14 @@ struct replica {
 	/** Link in the anon_replicas list. */
 	struct rlist in_anon;
 	/**
-	 * Trigger invoked when the applier connects to the
-	 * remote master for the first time. Used to insert
-	 * the replica into the replica set.
+	 * Trigger invoked when the applier changes its state.
 	 */
-	struct trigger on_connect;
+	struct trigger on_applier_state;
+	/**
+	 * Set if the applier has successfully synchornized to
+	 * the master (left "sync" and entered "follow" state).
+	 */
+	bool is_synced;
 };
 
 enum {
@@ -246,7 +266,7 @@ struct replica *
 replicaset_add(uint32_t replica_id, const struct tt_uuid *instance_uuid);
 
 /**
- * Connect \a quorum appliers to remote peers and receive UUID.
+ * Try to connect appliers to remote peers and receive UUID.
  * Appliers that did not connect will connect asynchronously.
  * On success, update the replica set with new appliers.
  * \post appliers are connected to remote hosts and paused.
@@ -255,16 +275,31 @@ replicaset_add(uint32_t replica_id, const struct tt_uuid *instance_uuid);
  * \param appliers the array of appliers
  * \param count size of appliers array
  * \param timeout connection timeout
+ * \param connect_all if this flag is set, fail unless all
+ *                    appliers have successfully connected
  */
 void
-replicaset_connect(struct applier **appliers, int count, int quorum,
-		   double timeout);
+replicaset_connect(struct applier **appliers, int count,
+		   double timeout, bool connect_all);
 
 /**
  * Resume all appliers registered with the replica set.
  */
 void
 replicaset_follow(void);
+
+/**
+ * Wait until all connected appliers catch up with the master.
+ */
+void
+replicaset_sync(void);
+
+/**
+ * Check if a replication quorum has been formed and
+ * switch the server to the write mode if so.
+ */
+void
+replicaset_check_quorum(void);
 
 #endif /* defined(__cplusplus) */
 

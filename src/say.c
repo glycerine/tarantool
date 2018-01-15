@@ -991,6 +991,8 @@ log_vsay(struct log *log, int level, const char *filename, int line,
 		break;
 	case SAY_LOGGER_SYSLOG:
 		write_to_syslog(log, total);
+		if (level != S_FATAL || log->fd == STDERR_FILENO)
+			break;
 	case SAY_LOGGER_BOOT:
 		(void) write(STDERR_FILENO, buf, total);
 		break;

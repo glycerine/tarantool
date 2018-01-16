@@ -98,14 +98,14 @@ access_check_func(const char *name, uint32_t name_len, struct func **funcp)
 }
 
 static int
-box_c_call(struct func *func, struct call_request *request, struct obuf *out)
+box_c_call(struct func *func, struct call_request *request,
+	   struct box_c_call_result *result)
 {
 	assert(func != NULL && func->def->language == FUNC_LANGUAGE_C);
 
 	/* Create a call context */
-	struct port port;
-	port_create(&port);
-	box_function_ctx_t ctx = { &port };
+	port_create(&result->port);
+	box_function_ctx_t ctx = { &result->port };
 
 	/* Clear all previous errors */
 	diag_clear(&fiber()->diag);
@@ -119,44 +119,38 @@ box_c_call(struct func *func, struct call_request *request, struct obuf *out)
 			/* Stored procedure forget to set diag  */
 			diag_set(ClientError, ER_PROC_C, "unknown error");
 		}
-		goto error;
+		return -1;
 	}
-
-	/* Push results to obuf */
-	struct obuf_svp svp;
-	if (iproto_prepare_select(out, &svp) != 0)
-		goto error;
-
-	if (request->header->type == IPROTO_CALL_16) {
-		/* Tarantool < 1.7.1 compatibility */
-		if (port_dump(&port, out) != 0) {
-			obuf_rollback_to_svp(out, &svp);
-			goto error;
-		}
-		iproto_reply_select(out, &svp, request->header->sync,
-				    schema_version, port.size);
-	} else {
-		assert(request->header->type == IPROTO_CALL);
-		char *size_buf = (char *)
-			obuf_alloc(out, mp_sizeof_array(port.size));
-		if (size_buf == NULL)
-			goto error;
-		mp_encode_array(size_buf, port.size);
-		if (port_dump(&port, out) != 0) {
-			obuf_rollback_to_svp(out, &svp);
-			goto error;
-		}
-		iproto_reply_select(out, &svp, request->header->sync,
-				    schema_version, 1);
-	}
-
-	port_destroy(&port);
 	return 0;
+}
 
-error:
-	txn_rollback();
-	port_destroy(&port);
-	return -1;
+static int
+box_c_call_result_dump(struct box_c_call_result *result,
+		       bool call_16, struct obuf *out)
+{
+	struct port *port = &result->port;
+
+	if (call_16) {
+		/* Tarantool < 1.7.1 compatibility */
+		if (port_dump(port, out) != 0)
+			return -1;
+		return port->size;
+	} else {
+		char *size_buf = (char *)
+			obuf_alloc(out, mp_sizeof_array(port->size));
+		if (size_buf == NULL)
+			return -1;
+		mp_encode_array(size_buf, port->size);
+		if (port_dump(port, out) != 0)
+			return -1;
+		return 1;
+	}
+}
+
+static void
+box_c_call_result_destroy(struct box_c_call_result *result)
+{
+	port_destroy(&result->port);
 }
 
 int
@@ -178,9 +172,12 @@ box_func_reload(const char *name)
 }
 
 int
-box_process_call(struct call_request *request, struct obuf *out)
+box_process_call(struct call_request *request, struct box_call_result *result)
 {
 	rmean_collect(rmean_box, IPROTO_CALL, 1);
+
+	memset(result, 0, sizeof(*result));
+
 	/**
 	 * Find the function definition and check access.
 	 */
@@ -224,9 +221,11 @@ box_process_call(struct call_request *request, struct obuf *out)
 
 	int rc;
 	if (func && func->def->language == FUNC_LANGUAGE_C) {
-		rc = box_c_call(func, request, out);
+		result->type = BOX_CALL_C;
+		rc = box_c_call(func, request, &result->value.c);
 	} else {
-		rc = box_lua_call(request, out);
+		result->type = BOX_CALL_LUA;
+		rc = box_lua_call(request, &result->value.lua);
 	}
 	/* Restore the original user */
 	if (orig_credentials)
@@ -248,13 +247,18 @@ box_process_call(struct call_request *request, struct obuf *out)
 }
 
 int
-box_process_eval(struct call_request *request, struct obuf *out)
+box_process_eval(struct call_request *request, struct box_call_result *result)
 {
 	rmean_collect(rmean_box, IPROTO_EVAL, 1);
+
+	memset(result, 0, sizeof(*result));
+	result->type = BOX_CALL_LUA;
+
 	/* Check permissions */
 	if (access_check_universe(PRIV_X) != 0)
 		return -1;
-	if (box_lua_eval(request, out) != 0) {
+
+	if (box_lua_eval(request, &result->value.lua) != 0) {
 		txn_rollback();
 		return -1;
 	}
@@ -270,4 +274,33 @@ box_process_eval(struct call_request *request, struct obuf *out)
 	}
 
 	return 0;
+}
+
+int
+box_call_result_dump(struct box_call_result *result,
+		     bool call_16, struct obuf *out)
+{
+	switch (result->type) {
+	case BOX_CALL_C:
+		return box_c_call_result_dump(&result->value.c, call_16, out);
+	case BOX_CALL_LUA:
+		return box_lua_call_result_dump(&result->value.lua, call_16, out);
+	default:
+		unreachable();
+	}
+}
+
+void
+box_call_result_destroy(struct box_call_result *result)
+{
+	switch (result->type) {
+	case BOX_CALL_C:
+		box_c_call_result_destroy(&result->value.c);
+		break;
+	case BOX_CALL_LUA:
+		box_lua_call_result_destroy(&result->value.lua);
+		break;
+	default:
+		unreachable();
+	}
 }

@@ -31,8 +31,7 @@
  * SUCH DAMAGE.
  */
 
-#include <stdint.h>
-#include "trivia/util.h"
+#include <stdbool.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -43,6 +42,7 @@ struct lua_State;
 void
 box_lua_call_init(struct lua_State *L);
 
+struct box_lua_call_result;
 struct call_request;
 struct obuf;
 
@@ -51,10 +51,17 @@ struct obuf;
  * (implementation of 'CALL' command code).
  */
 int
-box_lua_call(struct call_request *request, struct obuf *out);
+box_lua_call(struct call_request *request, struct box_lua_call_result *result);
 
 int
-box_lua_eval(struct call_request *request, struct obuf *out);
+box_lua_eval(struct call_request *request, struct box_lua_call_result *result);
+
+int
+box_lua_call_result_dump(struct box_lua_call_result *result,
+			 bool call_16, struct obuf *out);
+
+void
+box_lua_call_result_destroy(struct box_lua_call_result *result);
 
 #if defined(__cplusplus)
 } /* extern "C" */

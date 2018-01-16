@@ -36,11 +36,8 @@
 #include "lua/utils.h"
 #include "lua/msgpack.h"
 
-#include "box/txn.h"
 #include "box/xrow.h"
-#include "box/iproto_constants.h"
 #include "box/lua/tuple.h"
-#include "box/schema.h"
 #include "small/obuf.h"
 
 /**
@@ -353,72 +350,67 @@ encode_lua_call(lua_State *L)
 }
 
 static inline int
-box_process_lua(struct call_request *request, struct obuf *out, lua_CFunction handler)
+box_process_lua(struct call_request *request,
+		struct box_lua_call_result *result, lua_CFunction handler)
 {
 	lua_State *L = lua_newthread(tarantool_L);
 	int coro_ref = luaL_ref(tarantool_L, LUA_REGISTRYINDEX);
 
 	/*
 	 * Push the encoder function first - values returned by
-	 * the handler will be passed to it as arguments.
+	 * the handler will be passed to it as arguments, see
+	 * box_lua_call_result_dump().
 	 */
 	lua_pushcfunction(L, encode_lua_call);
 
 	lua_pushcfunction(L, handler);
 	lua_pushlightuserdata(L, request);
-	if (luaT_call(L, 1, LUA_MULTRET) != 0)
-		goto error;
+	if (luaT_call(L, 1, LUA_MULTRET) != 0) {
+		luaL_unref(tarantool_L, LUA_REGISTRYINDEX, coro_ref);
+		return -1;
+	}
+
+	result->L = L;
+	result->ref = coro_ref;
+	return 0;
+}
+
+int
+box_lua_call_result_dump(struct box_lua_call_result *result,
+			 bool call_16, struct obuf *out)
+{
+	struct lua_State *L = result->L;
 
 	/*
-	 * Add all elements from Lua stack to iproto.
-	 *
-	 * To allow clients to understand a complex return from
-	 * a procedure, we are compatible with SELECT protocol,
-	 * and return the number of return values first, and
-	 * then each return value as a tuple.
-	 *
-	 * (!) Please note that a save point for output buffer
-	 * must be taken only after finishing executing of Lua
-	 * function because Lua can yield and leave the
-	 * buffer in inconsistent state (a parallel request
-	 * from the same connection will break the protocol).
+	 * Add all elements from Lua stack to the buffer.
 	 *
 	 * TODO: forbid explicit yield from __serialize or __index here
 	 */
-	struct obuf_svp svp;
-	if (iproto_prepare_select(out, &svp) != 0)
-		goto error;
 
-	struct encode_lua_call_ctx ctx = { out, false, 0 };
-	if (request->header->type == IPROTO_CALL_16)
-		ctx.call_16 = true;
-
+	struct encode_lua_call_ctx ctx = { out, call_16, 0 };
 	lua_pushlightuserdata(L, &ctx);
-	if (luaT_call(L, lua_gettop(L) - 1, 0) != 0) {
-		obuf_rollback_to_svp(out, &svp);
-		goto error;
-	}
+	if (luaT_call(L, lua_gettop(L) - 1, 0) != 0)
+		return -1;
 
-	iproto_reply_select(out, &svp, request->header->sync,
-			    schema_version, ctx.count);
+	return ctx.count;
+}
 
-	luaL_unref(tarantool_L, LUA_REGISTRYINDEX, coro_ref);
-	return 0;
-error:
-	luaL_unref(tarantool_L, LUA_REGISTRYINDEX, coro_ref);
-	return -1;
+void
+box_lua_call_result_destroy(struct box_lua_call_result *result)
+{
+	luaL_unref(tarantool_L, LUA_REGISTRYINDEX, result->ref);
 }
 
 int
-box_lua_call(struct call_request *request, struct obuf *out)
+box_lua_call(struct call_request *request, struct box_lua_call_result *result)
 {
-	return box_process_lua(request, out, execute_lua_call);
+	return box_process_lua(request, result, execute_lua_call);
 }
 
 int
-box_lua_eval(struct call_request *request, struct obuf *out)
+box_lua_eval(struct call_request *request, struct box_lua_call_result *result)
 {
-	return box_process_lua(request, out, execute_lua_eval);
+	return box_process_lua(request, result, execute_lua_eval);
 }
 
 static int

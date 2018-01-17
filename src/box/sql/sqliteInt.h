@@ -3854,4 +3854,11 @@ void sqlite3VectorErrorMsg(Parse *, Expr *);
 extern int sqlSubProgramsRemaining;
 
 extern int sqlite3InitDatabase(sqlite3 * db, char **pzErrMsg);
+
+enum on_conflict_action
+table_column_nullable_action(struct Table *tab, uint32_t column);
+
+bool
+table_column_is_nullable(struct Table *tab, uint32_t column);
+
 #endif				/* SQLITEINT_H */

@@ -577,6 +577,12 @@ local function update_index_parts(space_id, parts)
             box.error(box.error.ILLEGAL_PARAMS,
                       "options.parts[" .. i .. "]: type (boolean) is expected")
         end
+        if part.action == nil then
+            if fmt and fmt.action ~= nil then
+                part.action = fmt.action
+                parts_can_be_simplified = false
+            end
+        end
         part.field = part.field - 1
         table.insert(result, part)
     end

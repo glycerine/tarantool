@@ -388,6 +388,7 @@ t;
   - 'box.error.FUNCTION_EXISTS : 52'
   - 'box.error.UPDATE_ARG_TYPE : 26'
   - 'box.error.CROSS_ENGINE_TRANSACTION : 81'
+  - 'box.error.ACTION_MISMATCH : 160'
   - 'box.error.injection : table: <address>
   - 'box.error.IDENTIFIER : 70'
   - 'box.error.SQL_BIND_NOT_FOUND : 159'

@@ -5053,3 +5053,64 @@ sqlite3VdbeRecordUnpackMsgpack(KeyInfo * pKeyInfo,	/* Information about the reco
 		pMem++;
 	}
 }
+
+/**
+ * Return action on nullable constraint violation of given column in given table.
+ * FIXME: This is implemented in expensive way. For each invocation table lookup
+ * is performed. In future, first param will be replaced with pointer to struct
+ * space.
+ *
+ * @param tab  pointer to the table
+ * @param column column number for which action to be returned
+ * @return return action found for given column
+ */
+enum on_conflict_action
+table_column_nullable_action(struct Table *tab, uint32_t column)
+{
+	uint32_t space_id = SQLITE_PAGENO_TO_SPACEID(tab->tnum);
+	struct space *space = space_cache_find(space_id);
+
+	assert(space != NULL);
+
+	struct tuple_format *format = space->format;
+
+	assert(format != NULL);
+	assert(format->field_count > column);
+
+	struct tuple_field field = format->fields[column];
+
+	return field.action;
+}
+
+/**
+ * Return nullable flag value of given column in given table.
+ * FIXME: This is implemented in expensive way. For each invocation table lookup
+ * is performed. In future, first param will be replaced with pointer to struct
+ * space.
+ *
+ * @param tab  pointer to the table
+ * @param column column number for which action to be returned
+ * @return return nullability flag value
+ */
+bool
+table_column_is_nullable(struct Table *tab, uint32_t column)
+{
+	/* Temporary hack: until Tarantoool's ephemeral spaces are on-boarded,
+	*  views are not handled properly in Tarantool as well. */
+	if (!(tab->tabFlags | TF_Ephemeral || tab->pSelect != NULL)) {
+		uint32_t space_id = SQLITE_PAGENO_TO_SPACEID(tab->tnum);
+		struct space *space = space_cache_find(space_id);
+
+		assert(space);
+
+		struct tuple_format *format = space->format;
+
+		assert(format);
+		assert(format->field_count > column);
+
+		return format->fields[column].action == ON_CONFLICT_ACTION_NONE;
+	} else {
+		/* tab is ephemeral (in SQLite sense).  */
+		return tab->aCol[column].notNull == 0;
+	}
+}

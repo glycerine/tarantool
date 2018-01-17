@@ -63,7 +63,7 @@ static intptr_t recycled_format_ids = FORMAT_ID_NIL;
 static uint32_t formats_size = 0, formats_capacity = 0;
 
 static const struct tuple_field tuple_field_default = {
-	FIELD_TYPE_ANY, TUPLE_OFFSET_SLOT_NIL, false, NULL, false,
+	FIELD_TYPE_ANY, TUPLE_OFFSET_SLOT_NIL, false, NULL, ON_CONFLICT_ACTION_ABORT
 };
 
 int
@@ -129,7 +129,7 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 		format->fields[i].is_key_part = false;
 		format->fields[i].type = fields[i].type;
 		format->fields[i].offset_slot = TUPLE_OFFSET_SLOT_NIL;
-		format->fields[i].is_nullable = fields[i].is_nullable;
+		format->fields[i].action = fields[i].action;
 		format->fields[i].name = name_pos;
 		size_t len = strlen(fields[i].name);
 		memcpy(name_pos, fields[i].name, len);
@@ -158,7 +158,7 @@ tuple_format_create(struct tuple_format *format, struct key_def * const *keys,
 			struct tuple_field *field =
 				&format->fields[part->fieldno];
 			if (part->fieldno >= field_count) {
-				field->is_nullable = key_part_is_nullable(part);
+				field->action = part->action;
 			} else if (tuple_field_is_nullable(field) !=
 				   key_part_is_nullable(part)) {
 				diag_set(ClientError, ER_NULLABLE_MISMATCH,

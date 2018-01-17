@@ -496,7 +496,7 @@ indexColumnNotNull(Index * pIdx, int iCol)
 	assert(iCol >= 0 && iCol < pIdx->nColumn);
 	j = pIdx->aiColumn[iCol];
 	if (j >= 0) {
-		return pIdx->pTable->aCol[j].notNull;
+		return !table_column_is_nullable(pIdx->pTable, j);
 	} else if (j == (-1)) {
 		return 1;
 	} else {
@@ -3412,7 +3412,8 @@ wherePathSatisfiesOrderBy(WhereInfo * pWInfo,	/* The WHERE clause */
 				if (isOrderDistinct
 				    && iColumn >= 0
 				    && j >= pLoop->nEq
-				    && pIndex->pTable->aCol[iColumn].notNull == 0) {
+				    && table_column_is_nullable(pIndex->pTable,
+								iColumn)) {
 					isOrderDistinct = 0;
 				}
 

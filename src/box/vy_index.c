@@ -171,8 +171,8 @@ vy_index_new(struct vy_index_env *index_env, struct vy_cache_env *cache_env,
 			goto fail_format;
 		for (uint32_t i = 0; i < cmp_def->part_count; ++i) {
 			uint32_t fieldno = cmp_def->parts[i].fieldno;
-			index->disk_format->fields[fieldno].is_nullable =
-				format->fields[fieldno].is_nullable;
+			index->disk_format->fields[fieldno].action =
+				format->fields[fieldno].action;
 		}
 	}
 	tuple_format_ref(index->disk_format);

@@ -97,8 +97,8 @@ struct tuple_field {
 	bool is_key_part;
 	/** Tuple field name, specified by a user. Can be NULL. */
 	char *name;
-	/** True, if a field can store NULL. */
-	bool is_nullable;
+	/** Action to perform if NULL constraint failed. */
+	enum on_conflict_action action;
 };
 
 /**
@@ -109,7 +109,7 @@ struct tuple_field {
  */
 static inline bool
 tuple_field_is_nullable(const struct tuple_field *tuple_field) {
-	return tuple_field->is_nullable;
+	return tuple_field->action == ON_CONFLICT_ACTION_NONE;
 }
 
 struct mh_strnu32_t;
